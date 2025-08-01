@@ -339,7 +339,7 @@ func (t *Transpiler) evaluateCallExpr(expr *ast.CallExpr) (string, error) {
 		funcName := ident.Name
 
 		// For BasicSwap with known arguments, we can evaluate the result
-		if strings.ToLower(funcName) == "basicswap" {
+		if strings.EqualFold(funcName, "basicswap") {
 			// BasicSwap(amountValid, feeValid) returns feeValid if amountValid is true
 			// Since we know amountValid = true and feeValid = true, result is true
 			return "true", nil
