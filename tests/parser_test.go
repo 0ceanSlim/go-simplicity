@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/0ceanslim/go-simplicity/pkg/compiler"
@@ -204,6 +205,12 @@ type Amount uint64
 func ProcessTransaction(hash Hash, amount Amount) bool {
     return amount > 0
 }
+
+func main() {
+    var h Hash
+    var a Amount = 1000
+    result := ProcessTransaction(h, a)
+}
 `
 
 	c := compiler.New(compiler.Config{
@@ -233,6 +240,10 @@ package main
 func CalculateFee(amount uint64, rate uint64) uint64 {
     return (amount * rate) / 10000
 }
+
+func main() {
+    fee := CalculateFee(1000, 25)
+}
 `
 
 	c := compiler.New(compiler.Config{
@@ -251,24 +262,128 @@ func CalculateFee(amount uint64, rate uint64) uint64 {
 	}
 }
 
+func TestVariableDeclarations(t *testing.T) {
+	source := `
+package main
+
+func main() {
+    var amount uint64 = 1000
+    const fee uint64 = 100
+    rate := 25
+}
+`
+
+	c := compiler.New(compiler.Config{
+		Target: "simplicityhl",
+		Debug:  false,
+	})
+
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compilation failed: %v", err)
+	}
+
+	// Check variable declarations
+	if !contains(result, "let amount: u64 = 1000;") {
+		t.Error("Variable declaration not correctly transpiled")
+	}
+
+	if !contains(result, "let fee: u64 = 100;") {
+		t.Error("Constant declaration not correctly transpiled")
+	}
+
+	if !contains(result, "let rate = 25;") {
+		t.Error("Type inference assignment not correctly transpiled")
+	}
+}
+
+func TestFunctionCalls(t *testing.T) {
+	source := `
+package main
+
+func Add(a uint32, b uint32) uint32 {
+    return a + b
+}
+
+func main() {
+    x := Add(10, 20)
+    y := Add(x, 5)
+}
+`
+
+	c := compiler.New(compiler.Config{
+		Target: "simplicityhl",
+		Debug:  false,
+	})
+
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compilation failed: %v", err)
+	}
+
+	// Check function calls
+	if !contains(result, "let x = Add(10, 20);") {
+		t.Error("Function call not correctly transpiled")
+	}
+
+	if !contains(result, "let y = Add(x, 5);") {
+		t.Error("Nested function call not correctly transpiled")
+	}
+}
+
+func TestConditionals(t *testing.T) {
+	source := `
+package main
+
+func main() {
+    amount := 1000
+    if amount > 0 {
+        return
+    } else {
+        return
+    }
+}
+`
+
+	c := compiler.New(compiler.Config{
+		Target: "simplicityhl",
+		Debug:  false,
+	})
+
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compilation failed: %v", err)
+	}
+
+	// Check conditional structure
+	if !contains(result, "match (amount > 0)") {
+		t.Error("If condition not correctly transpiled to match")
+	}
+
+	if !contains(result, "true => {") {
+		t.Error("True branch not correctly generated")
+	}
+
+	if !contains(result, "false => {") {
+		t.Error("False branch not correctly generated")
+	}
+}
+
 // Helper functions
 
 func normalizeWhitespace(s string) string {
-	// Simple whitespace normalization for testing
-	// In a real implementation, you might want more sophisticated normalization
-	return s
+	// Remove leading/trailing whitespace and normalize internal whitespace
+	lines := strings.Split(s, "\n")
+	var normalized []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			normalized = append(normalized, trimmed)
+		}
+	}
+	return strings.Join(normalized, "\n")
 }
 
 func contains(text, substring string) bool {
-	return len(text) >= len(substring) &&
-		indexOf(text, substring) >= 0
-}
-
-func indexOf(text, substring string) int {
-	for i := 0; i <= len(text)-len(substring); i++ {
-		if text[i:i+len(substring)] == substring {
-			return i
-		}
-	}
-	return -1
+	return strings.Contains(text, substring)
 }

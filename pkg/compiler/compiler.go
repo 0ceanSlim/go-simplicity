@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 
 	"github.com/0ceanslim/go-simplicity/pkg/transpiler"
 )
@@ -34,7 +35,7 @@ func New(config Config) *Compiler {
 // Compile compiles Go source code to the target format
 func (c *Compiler) Compile(source, filename string) (string, error) {
 	// Parse Go source
-	file, err := parser.ParseFile(c.fset, filename, source, 0)
+	file, err := parser.ParseFile(c.fset, filename, source, parser.ParseComments)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse Go source: %w", err)
 	}
@@ -69,7 +70,7 @@ func (c *Compiler) validateGoCode(file *ast.File) error {
 	ast.Inspect(file, validator.visit)
 
 	if len(validator.errors) > 0 {
-		return fmt.Errorf("unsupported Go features detected:\n%v", validator.errors)
+		return fmt.Errorf("unsupported Go features detected:\n%s", strings.Join(validator.errors, "\n"))
 	}
 
 	return nil
@@ -101,6 +102,27 @@ func (v *goValidator) visit(n ast.Node) bool {
 	case *ast.MapType:
 		v.errors = append(v.errors, "maps are not supported in Simplicity")
 		return false
+	case *ast.CallExpr:
+		// Check for make() calls
+		if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "make" {
+			if len(node.Args) > 0 {
+				switch node.Args[0].(type) {
+				case *ast.MapType:
+					v.errors = append(v.errors, "maps are not supported in Simplicity")
+				case *ast.ChanType:
+					v.errors = append(v.errors, "channels are not supported in Simplicity")
+				case *ast.ArrayType:
+					if arrType, ok := node.Args[0].(*ast.ArrayType); ok && arrType.Len == nil {
+						v.errors = append(v.errors, "slices are not supported, use fixed-size arrays")
+					}
+				}
+			}
+		}
+	case *ast.TypeSpec:
+		// Check for interface types in type declarations
+		if _, ok := node.Type.(*ast.InterfaceType); ok {
+			v.errors = append(v.errors, "interfaces are not supported in Simplicity")
+		}
 	}
 	return true
 }
