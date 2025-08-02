@@ -1,241 +1,322 @@
 # go-simplicity
 
-A Go to Simplicity transpiler that enables developers to write smart contracts in Go and compile them to Simplicity bytecode for blockchain applications.
+A Go to SimplicityHL transpiler that converts Go smart contract logic into Simplicity bytecode for Bitcoin and Elements sidechains.
 
-## Overview
+## Project Status: Early Stage - Boolean Pattern Matching
 
-Simplicity is a typed, combinator-based, functional language designed for blockchain applications that provides formal verification capabilities and static resource analysis. This project bridges the gap between Go's familiar syntax and Simplicity's powerful guarantees.
+This transpiler currently handles **boolean-based smart contract patterns** and provides a foundation for full Simplicity support. While not yet feature-complete, it demonstrates a novel approach to blockchain smart contracts through compile-time evaluation and pure pattern matching.
 
-## Features
+## What Works Right Now
 
-- **Go to SimplicityHL Transpilation**: Convert Go code to SimplicityHL (Rust-like syntax)
-- **Type Safety**: Automatic mapping of Go types to Simplicity types
-- **Static Analysis**: Validates Go code against Simplicity's constraints
-- **Bitcoin Integration**: Support for Bitcoin-specific types and operations
-- **Example Contracts**: Includes atomic swaps, DEX orders, and basic validation
+### ✅ Currently Supported Go → SimplicityHL
 
-## Installation
+- **Boolean functions** with pattern matching
+- **Compile-time expression evaluation** (constants, arithmetic, comparisons)
+- **Witness/parameter separation** (runtime vs compile-time values)
+- **Simple control flow** (if/else converted to pattern matching)
+- **Function composition** with boolean parameters
+- **Basic types**: `bool`, `uint32`, `uint64`
 
-```bash
-go install github.com/yourusername/go-simplicity/cmd/simgo@latest
-```
+### Example: Working P2PK Contract
 
-Or clone and build:
-
-```bash
-git clone https://github.com/yourusername/go-simplicity.git
-cd go-simplicity
-go build -o simgo cmd/simgo/main.go
-```
-
-## Quick Start
-
-### 1. Write Go Code
+**Input Go Code:**
 
 ```go
 package main
 
-func ValidateAmount(amount uint64) bool {
-    return amount > 0
-}
-
-func CalculateFee(amount uint64, rate uint64) uint64 {
-    return (amount * rate) / 10000
+func ValidateP2PK(signatureValid bool) bool {
+    return signatureValid
 }
 
 func main() {
-    var amount uint64 = 1000
-    var rate uint64 = 25 // 0.25%
-    result := ValidateAmount(amount)
+    signatureValid := true
+    result := ValidateP2PK(signatureValid)
+
     if !result {
         return
     }
 }
 ```
 
-### 2. Compile to SimplicityHL
-
-```bash
-simgo -input examples/basic_swap.go -output basic_swap.shl
-```
-
-### 3. Generated SimplicityHL
+**Generated SimplicityHL:**
 
 ```rust
-// Generated from Go source by go-simplicity compiler
-
-fn validate_amount(amount: u64) -> bool {
-    (amount > 0)
+mod witness {
+    const SIGNATURE_VALID: bool = true;
 }
 
-fn calculate_fee(amount: u64, rate: u64) -> u64 {
-    ((amount * rate) / 10000)
+mod param {
+}
+
+fn validate_p2pk(signature_valid: bool) -> bool {
+    signature_valid
 }
 
 fn main() {
-    let amount: u64 = 1000;
-    let rate: u64 = 25;
-    let result = validate_amount(amount);
-    match result {
-        true => {
+    assert!(validate_p2pk(witness::SIGNATURE_VALID));
+}
+```
+
+## Target: Real Simplicity Contracts
+
+The goal is to generate contracts like these working Simplicity examples:
+
+<details>
+<summary>P2PK (Pay to Public Key)</summary>
+
+```rust
+mod witness {
+    const ALICE_SIGNATURE: [u8; 64] = 0x9a3a093012693c1d...;
+}
+mod param {
+    const ALICE_PUBLIC_KEY: u256 = 0x9bef8d556d80e43a...;
+}
+fn main() {
+    jet::bip_0340_verify((param::ALICE_PUBLIC_KEY, jet::sig_all_hash()), witness::ALICE_SIGNATURE)
+}
+```
+
+</details>
+
+<details>
+<summary>2-of-3 Multisig</summary>
+
+```rust
+mod witness {
+    const SIGNATURES_2_OF_3: [Option<[u8; 64]>; 3] = [Some(0xd95c15407cda...), None, Some(0x6f0854f1bb0d...)];
+}
+mod param {
+    const ALICE_PUBLIC_KEY: u256 = 0x9bef8d556d80e43a...;
+    const BOB_PUBLIC_KEY: u256 = 0xe37d58a1aae4ba05...;
+    const CHARLIE_PUBLIC_KEY: u256 = 0x688466442a134ee3...;
+}
+fn main() {
+    check2of3multisig([param::ALICE_PUBLIC_KEY, param::BOB_PUBLIC_KEY, param::CHARLIE_PUBLIC_KEY], witness::SIGNATURES_2_OF_3);
+}
+```
+
+</details>
+
+<details>
+<summary>HTLC (Hash Time Locked Contract)</summary>
+
+```rust
+mod witness {
+    const COMPLETE_OR_CANCEL: Either<(u256, [u8; 64]),[u8; 64]> = Left((0x9bf49a6a0755f953..., 0xddd1b8079208208e...));
+}
+fn main() {
+    match witness::COMPLETE_OR_CANCEL {
+        Left(preimage_and_sig: (u256, Signature)) => {
+            let (preimage, recipient_sig): (u256, Signature) = preimage_and_sig;
+            complete_spend(preimage, recipient_sig);
         },
-        false => {
-            ()
-        },
+        Right(sender_sig: Signature) => cancel_spend(sender_sig),
     }
 }
 ```
 
-## Supported Go Features
+</details>
 
-### ✅ Supported
+## Critical Gap Analysis
 
-- Basic types: `bool`, `uint8`, `uint16`, `uint32`, `uint64`
-- Fixed-size arrays: `[32]byte`, `[4]uint64`
-- Functions with parameters and return values
-- Basic arithmetic: `+`, `-`, `*`, `/`
-- Comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- Boolean logic: `&&`, `||`, `!`
-- If/else statements
-- Variable declarations and assignments
-- Constants
+### ❌ **Missing for Real Simplicity Contracts:**
 
-### ❌ Not Supported (Simplicity Limitations)
+1. **Bitcoin Types**
 
-- Loops (`for`, `range`)
-- Slices (`[]T`)
-- Maps (`map[K]V`)
-- Channels (`chan T`)
-- Goroutines (`go`)
-- Interfaces
-- Pointers
-- Recursion
-- Dynamic memory allocation
+   - `u256`, `[u8; 64]`, `Pubkey`, `Signature`
+   - Type aliases for Bitcoin primitives
 
-## Type Mapping
+2. **Complex Types**
 
-| Go Type         | Simplicity Type | Description             |
-| --------------- | --------------- | ----------------------- |
-| `bool`          | `bool`          | Boolean values          |
-| `uint8`, `byte` | `u8`            | 8-bit unsigned integer  |
-| `uint16`        | `u16`           | 16-bit unsigned integer |
-| `uint32`        | `u32`           | 32-bit unsigned integer |
-| `uint64`        | `u64`           | 64-bit unsigned integer |
-| `[N]T`          | `[T; N]`        | Fixed-size array        |
-| `struct{...}`   | `(T1, T2, ...)` | Tuple                   |
+   - `Either<A, B>` sum types
+   - `Option<T>` nullable types
+   - Fixed arrays `[T; N]`
+   - Tuples `(A, B, C)`
 
-## Bitcoin Integration
+3. **Pattern Matching**
 
-When importing `"simplicity/bitcoin"`, additional types become available:
+   - `match` expressions on non-boolean types
+   - Destructuring assignments
+   - Complex case analysis
 
-```go
-import "simplicity/bitcoin"
+4. **Jet Functions**
 
-func CheckSignature(pubkey bitcoin.Pubkey, sig bitcoin.Signature, msg bitcoin.Hash) bool {
-    // This would use Simplicity jets for ECDSA verification
-    return bitcoin.VerifySignature(pubkey, sig, msg)
-}
-```
+   - `jet::bip_0340_verify()` - signature verification
+   - `jet::sha_256_ctx_8_*()` - hashing functions
+   - `jet::sig_all_hash()` - transaction hashing
+   - `jet::eq_256()`, `jet::le_32()` - comparisons
 
-## Examples
+5. **Advanced Control Flow**
+   - Multiple return paths
+   - Complex witness data handling
+   - Recursive data structures
 
-The `examples/` directory contains several example contracts:
+## Development Roadmap
 
-- `basic_swap.go`: Simple amount validation and fee calculation
-- `atomic_swap.go`: Hash time-locked contract (HTLC)
-- `dex_order.go`: Decentralized exchange order matching
+### 🎯 **Phase 2: Core Bitcoin Types (CRITICAL)**
 
-## Command Line Usage
+**Goal:** Generate basic P2PK and P2PKH contracts
+
+- [ ] Add `u256` type support
+- [ ] Implement `[u8; 64]` arrays
+- [ ] Create Bitcoin type aliases (`Pubkey`, `Signature`, `Hash`)
+- [ ] Add jet function stubs (`jet::bip_0340_verify`, etc.)
+- [ ] Test with real P2PK contract generation
+
+**Target:** Successfully transpile P2PK contract from Go to working SimplicityHL
+
+### 🎯 **Phase 3: Sum Types & Pattern Matching**
+
+**Goal:** Generate HTLC and conditional contracts
+
+- [ ] Implement `Either<A, B>` types
+- [ ] Add `Option<T>` support
+- [ ] Create `match` expression generation
+- [ ] Handle tuple destructuring
+- [ ] Support complex witness data patterns
+
+**Target:** Successfully transpile HTLC contract with Left/Right paths
+
+### 🎯 **Phase 4: Arrays & Multisig**
+
+**Goal:** Generate multisig contracts
+
+- [ ] Fixed array support `[T; N]`
+- [ ] Array iteration and counting
+- [ ] Option array handling `[Option<T>; N]`
+- [ ] Counter-based logic
+- [ ] Complex validation functions
+
+**Target:** Successfully transpile 2-of-3 multisig contract
+
+### 🎯 **Phase 5: Advanced Contracts**
+
+**Goal:** Generate vault, inheritance, and complex contracts
+
+- [ ] Recursive covenant patterns
+- [ ] Time-based logic
+- [ ] Oracle data validation
+- [ ] Multi-path spending conditions
+
+## Installation & Usage
 
 ```bash
-simgo [options]
+# Install
+git clone https://github.com/0ceanslim/go-simplicity.git
+cd go-simplicity
+make build
 
-Options:
-  -input string
-        Input Go source file (required)
-  -output string
-        Output SimplicityHL file (default: stdout)
-  -target string
-        Target format: simplicityhl, simplicity (default "simplicityhl")
-  -debug
-        Enable debug output
+# Test current capabilities
+./build/simgo -input examples/basic_swap.go -output basic_swap.shl
+
+# Run tests
+make test
 ```
 
-## Development Status
+## Current Examples That Work
 
-This is an early-stage project implementing the basic transpilation pipeline:
+```bash
+# Simple boolean validation
+./build/simgo -input examples/simple_logic.go
 
-- ✅ **Phase 1**: Basic Go to SimplicityHL transpilation
-- 🚧 **Phase 2**: Bitcoin-specific types and jets integration
-- 📋 **Phase 3**: Advanced optimization and tooling
+# Basic payment validation
+./build/simgo -input examples/simple_payment.go
+
+# Multisig (boolean-only version)
+./build/simgo -input examples/simple_multisig.go
+```
+
+## Contributing to Bridge the Gap
+
+### 🚨 **High Priority Issues**
+
+1. **Bitcoin Types** - Implement `u256`, `[u8; 64]` in type mapper
+2. **Jet Functions** - Add stubs for cryptographic operations
+3. **Either Types** - Critical for real contracts
+4. **Pattern Matching** - Beyond boolean logic
+
+### 📝 **How to Contribute**
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+**Key Areas:**
+
+- `pkg/types/` - Type system extensions
+- `pkg/transpiler/` - Pattern matching and code generation
+- `examples/` - Real-world contract examples
+- `tests/` - Comprehensive test coverage
 
 ## Architecture
 
 ```
 cmd/simgo/          # Compiler binary
 pkg/
-├── compiler/       # Main compilation logic
-├── parser/         # Go AST parsing (uses go/parser)
-├── transpiler/     # Go → SimplicityHL conversion
-└── types/          # Type system mapping
-examples/           # Example contracts
+├── compiler/       # Validation and orchestration
+├── transpiler/     # Core Go → SimplicityHL conversion
+└── types/          # Type mapping (NEEDS EXTENSION)
+examples/           # Contract examples (BASIC ONLY)
 tests/              # Test suite
 ```
 
-## Contributing
+## Why This Approach Works
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1. **Compile-time Safety** - Pre-compute complex operations
+2. **Resource Bounds** - Static analysis of all operations
+3. **Formal Verification** - Pure pattern matching is provable
+4. **Bitcoin Compatible** - Maps directly to Simplicity semantics
 
-## Roadmap
+## Limitations & Honest Assessment
 
-### Phase 1: Core Transpiler (Current)
+### Current Reality
 
-- [x] Basic Go parsing
-- [x] Type mapping
-- [x] SimplicityHL generation
-- [x] Function transpilation
-- [ ] Comprehensive testing
+- **Boolean-heavy contracts only**
+- **No cryptographic operations**
+- **Limited type system**
+- **Simple pattern matching only**
 
-### Phase 2: Smart Contract Features
+### But the Foundation is Solid
 
-- [ ] Bitcoin-specific types (Hash, Pubkey, Signature)
-- [ ] Simplicity jets integration
-- [ ] Asset handling (L-BTC, L-USDT)
-- [ ] Error handling and assertions
+- **Correct transpilation strategy**
+- **Working witness/parameter separation**
+- **Extensible architecture**
+- **Clear path to full Simplicity support**
 
-### Phase 3: Advanced Features
+## Next Milestone: First Real Bitcoin Contract
 
-- [ ] Optimization passes
-- [ ] VS Code extension
-- [ ] Debug support
-- [ ] Direct Simplicity compilation (bypass SimplicityHL)
+**Goal:** Generate a working P2PK contract that validates signatures
 
-## Related Projects
+**Success Criteria:**
 
-- [Simplicity](https://github.com/BlockstreamResearch/simplicity) - The core Simplicity language
-- [SimplicityHL](https://github.com/BlockstreamResearch/SimplicityHL) - High-level Simplicity frontend
-- [Elements](https://github.com/ElementsProject/elements) - Bitcoin sidechain with Simplicity support
+```rust
+// Generated from Go input
+mod witness {
+    const ALICE_SIGNATURE: [u8; 64] = /* actual signature */;
+}
+mod param {
+    const ALICE_PUBLIC_KEY: u256 = /* actual pubkey */;
+}
+fn main() {
+    jet::bip_0340_verify((param::ALICE_PUBLIC_KEY, jet::sig_all_hash()), witness::ALICE_SIGNATURE)
+}
+```
 
-## Resources
+**Required Additions:**
 
-- [Simplicity Paper](https://blockstream.com/simplicity.pdf) - Original research paper
-- [Simplicity Docs](https://simplicity.readthedocs.io/) - Language documentation
-- [Blockstream Research](https://blockstream.com/research/) - Latest developments
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Russell O'Connor and the Blockstream Research team for creating Simplicity
-- The Go team for excellent parsing tools in the `go/ast` package
-- The Bitcoin development community for inspiration
+1. `u256` and `[u8; 64]` types
+2. Jet function generation
+3. Bitcoin type aliases
+4. Constant hex literal support
 
 ---
 
-**Note**: This is experimental software. Do not use in production without thorough testing and auditing.
+**This is experimental software with a clear development path. The boolean pattern matching foundation is solid, but significant work remains to support real Bitcoin contracts.**
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Resources
+
+- [Simplicity Paper](https://blockstream.com/simplicity.pdf)
+- [SimplicityHL Documentation](https://github.com/BlockstreamResearch/SimplicityHL)
+- [Elements Project](https://github.com/ElementsProject/elements)
