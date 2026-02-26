@@ -49,8 +49,69 @@ func (tm *TypeMapper) MapGoType(goType ast.Expr) (string, error) {
 		return tm.mapStructType(t)
 	case *ast.SelectorExpr:
 		return tm.mapSelectorType(t)
+	case *ast.IndexExpr:
+		// Handle generic types like Option[T]
+		return tm.mapGenericType(t)
+	case *ast.IndexListExpr:
+		// Handle generic types with multiple params like Either[L, R]
+		return tm.mapMultiGenericType(t)
 	default:
 		return "", fmt.Errorf("unsupported Go type: %T", goType)
+	}
+}
+
+// mapGenericType handles single-parameter generics like Option[T]
+func (tm *TypeMapper) mapGenericType(indexExpr *ast.IndexExpr) (string, error) {
+	// Get the base type name
+	baseName := ""
+	if ident, ok := indexExpr.X.(*ast.Ident); ok {
+		baseName = ident.Name
+	} else {
+		return "", fmt.Errorf("unsupported generic base type: %T", indexExpr.X)
+	}
+
+	// Get the type parameter
+	paramType, err := tm.MapGoType(indexExpr.Index)
+	if err != nil {
+		return "", fmt.Errorf("failed to map generic parameter: %w", err)
+	}
+
+	switch baseName {
+	case "Option":
+		return fmt.Sprintf("Option<%s>", paramType), nil
+	default:
+		return "", fmt.Errorf("unsupported generic type: %s", baseName)
+	}
+}
+
+// mapMultiGenericType handles multi-parameter generics like Either[L, R]
+func (tm *TypeMapper) mapMultiGenericType(indexListExpr *ast.IndexListExpr) (string, error) {
+	// Get the base type name
+	baseName := ""
+	if ident, ok := indexListExpr.X.(*ast.Ident); ok {
+		baseName = ident.Name
+	} else {
+		return "", fmt.Errorf("unsupported generic base type: %T", indexListExpr.X)
+	}
+
+	// Get all type parameters
+	var paramTypes []string
+	for _, idx := range indexListExpr.Indices {
+		paramType, err := tm.MapGoType(idx)
+		if err != nil {
+			return "", fmt.Errorf("failed to map generic parameter: %w", err)
+		}
+		paramTypes = append(paramTypes, paramType)
+	}
+
+	switch baseName {
+	case "Either":
+		if len(paramTypes) != 2 {
+			return "", fmt.Errorf("Either requires exactly 2 type parameters, got %d", len(paramTypes))
+		}
+		return fmt.Sprintf("Either<%s, %s>", paramTypes[0], paramTypes[1]), nil
+	default:
+		return "", fmt.Errorf("unsupported generic type: %s", baseName)
 	}
 }
 

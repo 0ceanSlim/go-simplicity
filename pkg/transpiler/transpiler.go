@@ -13,14 +13,16 @@ import (
 
 // Transpiler converts Go AST to SimplicityHL
 type Transpiler struct {
-	typeMapper    *simplicity_types.TypeMapper
-	jetRegistry   *jets.JetRegistry
-	output        strings.Builder
-	witnessValues []WitnessValue
-	constants     []Constant
-	functions     []Function
-	jetCalls      []JetCall // Track jet calls for code generation
-	mainBodyStmts []string  // Store main function body statements
+	typeMapper      *simplicity_types.TypeMapper
+	jetRegistry     *jets.JetRegistry
+	output          strings.Builder
+	witnessValues   []WitnessValue
+	constants       []Constant
+	functions       []Function
+	jetCalls        []JetCall          // Track jet calls for code generation
+	mainBodyStmts   []string           // Store main function body statements
+	matchExprs      []*MatchExpression // Track match expressions
+	hasMatchExpr    bool               // Flag to indicate main has match expression
 }
 
 // JetCall represents a jet function call in the code
@@ -72,6 +74,8 @@ func (t *Transpiler) ToSimplicityHL(file *ast.File, fset *token.FileSet) (string
 	t.functions = nil
 	t.jetCalls = nil
 	t.mainBodyStmts = nil
+	t.matchExprs = nil
+	t.hasMatchExpr = false
 
 	// Phase 1: Analyze the code and extract all computable values
 	if err := t.analyzeCode(file); err != nil {
@@ -242,10 +246,178 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 					}
 				}
 			}
+
+		case *ast.IfStmt:
+			// Check if this is a sum type pattern match (if w.IsLeft { ... } else { ... })
+			matchExpr, err := t.analyzeIfAsMatch(s)
+			if err != nil {
+				return err
+			}
+			if matchExpr != nil {
+				t.matchExprs = append(t.matchExprs, matchExpr)
+				t.hasMatchExpr = true
+			}
+
+		case *ast.TypeSwitchStmt:
+			// Handle type switch: switch v := expr.(type) { case Left: ... case Right: ... }
+			matchExpr, err := t.analyzeTypeSwitchStmt(s)
+			if err != nil {
+				return err
+			}
+			if matchExpr != nil {
+				t.matchExprs = append(t.matchExprs, matchExpr)
+				t.hasMatchExpr = true
+			}
+
+		case *ast.SwitchStmt:
+			// Handle switch on sum type tag: switch { case w.IsLeft: ... case !w.IsLeft: ... }
+			matchExpr, err := t.analyzeSwitchAsMatch(s)
+			if err != nil {
+				return err
+			}
+			if matchExpr != nil {
+				t.matchExprs = append(t.matchExprs, matchExpr)
+				t.hasMatchExpr = true
+			}
 		}
 	}
 
 	return nil
+}
+
+// analyzeIfAsMatch checks if an if statement represents sum type pattern matching
+func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, error) {
+	// Check if condition is checking a sum type field (w.IsLeft, opt.IsSome, etc.)
+	scrutinee, pattern := t.extractSumTypeCondition(ifStmt.Cond)
+	if scrutinee == "" {
+		return nil, nil // Not a sum type pattern match
+	}
+
+	match := &MatchExpression{
+		Scrutinee: scrutinee,
+	}
+
+	// Analyze the "then" branch
+	thenCase := MatchCase{
+		Pattern: pattern,
+	}
+	for _, stmt := range ifStmt.Body.List {
+		stmtStr, err := t.analyzeStatement(stmt)
+		if err != nil {
+			return nil, err
+		}
+		if stmtStr != "" {
+			thenCase.BodyStmts = append(thenCase.BodyStmts, stmtStr)
+		}
+	}
+	match.Cases = append(match.Cases, thenCase)
+
+	// Analyze the "else" branch if present
+	if ifStmt.Else != nil {
+		elsePattern := t.getOppositePattern(pattern)
+		elseCase := MatchCase{
+			Pattern: elsePattern,
+		}
+
+		switch e := ifStmt.Else.(type) {
+		case *ast.BlockStmt:
+			for _, stmt := range e.List {
+				stmtStr, err := t.analyzeStatement(stmt)
+				if err != nil {
+					return nil, err
+				}
+				if stmtStr != "" {
+					elseCase.BodyStmts = append(elseCase.BodyStmts, stmtStr)
+				}
+			}
+		case *ast.IfStmt:
+			// Nested if-else chain - recurse
+			// For now, treat as else branch
+			for _, stmt := range e.Body.List {
+				stmtStr, err := t.analyzeStatement(stmt)
+				if err != nil {
+					return nil, err
+				}
+				if stmtStr != "" {
+					elseCase.BodyStmts = append(elseCase.BodyStmts, stmtStr)
+				}
+			}
+		}
+		match.Cases = append(match.Cases, elseCase)
+	}
+
+	return match, nil
+}
+
+// extractSumTypeCondition extracts scrutinee and pattern from a condition
+func (t *Transpiler) extractSumTypeCondition(cond ast.Expr) (scrutinee, pattern string) {
+	switch c := cond.(type) {
+	case *ast.SelectorExpr:
+		// w.IsLeft or opt.IsSome
+		if ident, ok := c.X.(*ast.Ident); ok {
+			scrutinee = t.resolveWitnessRef(ident.Name)
+			switch c.Sel.Name {
+			case "IsLeft":
+				pattern = "Left"
+			case "IsRight":
+				pattern = "Right"
+			case "IsSome":
+				pattern = "Some"
+			case "IsNone":
+				pattern = "None"
+			}
+		}
+	case *ast.UnaryExpr:
+		// !w.IsLeft means Right
+		if c.Op == token.NOT {
+			if sel, ok := c.X.(*ast.SelectorExpr); ok {
+				if ident, ok := sel.X.(*ast.Ident); ok {
+					scrutinee = t.resolveWitnessRef(ident.Name)
+					switch sel.Sel.Name {
+					case "IsLeft":
+						pattern = "Right"
+					case "IsSome":
+						pattern = "None"
+					}
+				}
+			}
+		}
+	}
+	return
+}
+
+// resolveWitnessRef converts a variable name to its witness reference
+func (t *Transpiler) resolveWitnessRef(name string) string {
+	snakeName := strings.ToUpper(t.toSnakeCase(name))
+	// Check if it's a witness value
+	for _, w := range t.witnessValues {
+		if strings.ToUpper(w.Name) == snakeName {
+			return fmt.Sprintf("witness::%s", snakeName)
+		}
+	}
+	return t.toSnakeCase(name)
+}
+
+// getOppositePattern returns the opposite pattern for sum types
+func (t *Transpiler) getOppositePattern(pattern string) string {
+	switch pattern {
+	case "Left":
+		return "Right"
+	case "Right":
+		return "Left"
+	case "Some":
+		return "None"
+	case "None":
+		return "Some"
+	default:
+		return "_"
+	}
+}
+
+// analyzeSwitchAsMatch analyzes a switch statement as a pattern match
+func (t *Transpiler) analyzeSwitchAsMatch(switchStmt *ast.SwitchStmt) (*MatchExpression, error) {
+	// For now, return nil - we'll implement this for more complex patterns later
+	return nil, nil
 }
 
 // evaluateJetArg evaluates an argument to a jet call, handling various cases
@@ -277,6 +449,23 @@ func (t *Transpiler) evaluateJetArg(arg ast.Expr) (string, error) {
 			return t.evaluateHexLiteral(a.Value)
 		}
 		return a.Value, nil
+	case *ast.SelectorExpr:
+		// Handle struct field access like w.Preimage or w.RecipientSig
+		if ident, ok := a.X.(*ast.Ident); ok {
+			varName := t.toSnakeCase(ident.Name)
+			fieldName := t.toSnakeCase(a.Sel.Name)
+			// Check if base is a witness value
+			for _, w := range t.witnessValues {
+				if strings.EqualFold(strings.ToUpper(w.Name), strings.ToUpper(varName)) {
+					return fmt.Sprintf("witness::%s.%s", strings.ToUpper(varName), fieldName), nil
+				}
+			}
+			return fmt.Sprintf("%s.%s", varName, fieldName), nil
+		}
+		return t.evaluateExpression(arg)
+	case *ast.CallExpr:
+		// Handle nested jet calls like jet.SHA256Init()
+		return t.evaluateCallExpr(a)
 	default:
 		return t.evaluateExpression(arg)
 	}
@@ -424,12 +613,38 @@ func (t *Transpiler) evaluateExpression(expr ast.Expr) (string, error) {
 			return "true", nil
 		}
 	case *ast.Ident:
-		// Return placeholder for identifiers
-		return "true", nil
+		// Check if it's a known constant
+		for _, c := range t.constants {
+			if strings.EqualFold(c.Name, strings.ToUpper(t.toSnakeCase(e.Name))) {
+				return fmt.Sprintf("param::%s", strings.ToUpper(t.toSnakeCase(e.Name))), nil
+			}
+		}
+		// Check if it's a witness value
+		for _, w := range t.witnessValues {
+			if strings.EqualFold(strings.ToUpper(w.Name), strings.ToUpper(t.toSnakeCase(e.Name))) {
+				return fmt.Sprintf("witness::%s", strings.ToUpper(t.toSnakeCase(e.Name))), nil
+			}
+		}
+		// Check if it's a local variable from a jet call
+		for _, jc := range t.jetCalls {
+			if jc.VarName == t.toSnakeCase(e.Name) {
+				return jc.VarName, nil
+			}
+		}
+		// Return placeholder for unknown identifiers
+		return t.toSnakeCase(e.Name), nil
 	case *ast.SelectorExpr:
-		// Handle jet.X() calls where we just need to return the selector
+		// Handle struct field access like w.Preimage or w.RecipientSig
 		if ident, ok := e.X.(*ast.Ident); ok {
-			return fmt.Sprintf("%s.%s", ident.Name, e.Sel.Name), nil
+			varName := t.toSnakeCase(ident.Name)
+			fieldName := t.toSnakeCase(e.Sel.Name)
+			// Check if base is a witness value
+			for _, w := range t.witnessValues {
+				if strings.EqualFold(strings.ToUpper(w.Name), strings.ToUpper(varName)) {
+					return fmt.Sprintf("witness::%s.%s", strings.ToUpper(varName), fieldName), nil
+				}
+			}
+			return fmt.Sprintf("%s.%s", varName, fieldName), nil
 		}
 	}
 
@@ -620,6 +835,16 @@ func (t *Transpiler) generateFunction(function Function) {
 
 func (t *Transpiler) generateMainFunction() {
 	t.writeLine("fn main() {")
+
+	// If we have match expressions, generate them
+	if t.hasMatchExpr && len(t.matchExprs) > 0 {
+		for _, match := range t.matchExprs {
+			matchCode := t.generateMatchExpression(match, "    ")
+			t.writeLine(matchCode)
+		}
+		t.writeLine("}")
+		return
+	}
 
 	// If we have jet calls, generate them in the main function
 	if len(t.jetCalls) > 0 {

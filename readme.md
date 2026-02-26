@@ -2,9 +2,9 @@
 
 A Go to SimplicityHL transpiler that converts Go smart contract logic into Simplicity bytecode for Bitcoin and Elements sidechains.
 
-## Project Status: Phase 2 Complete - P2PK Contracts
+## Project Status: Phase 3 Complete - HTLC Contracts
 
-This transpiler now supports **real P2PK (Pay-to-Public-Key) contracts** with hex literals and Simplicity jet functions. The foundation is solid and expanding toward full Simplicity support.
+This transpiler now supports **HTLC (Hash Time Locked Contracts)** with sum types (`Either`, `Option`), pattern matching via `if/else`, and struct-based witness data. Building toward full Simplicity support.
 
 ## What Works Right Now
 
@@ -13,11 +13,14 @@ This transpiler now supports **real P2PK (Pay-to-Public-Key) contracts** with he
 - **Boolean functions** with pattern matching
 - **Compile-time expression evaluation** (constants, arithmetic, comparisons)
 - **Witness/parameter separation** (runtime vs compile-time values)
-- **Simple control flow** (if/else converted to pattern matching)
+- **Control flow** (if/else converted to match expressions)
 - **Function composition** with boolean parameters
 - **Basic types**: `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `u256`, `Ctx8`
 - **Hex literals** with automatic type inference (0x... -> u8/u16/u32/u64/u128/u256)
 - **Fixed-size arrays**: `[T; N]` including `[u8; 64]` for signatures
+- **Sum types**: `Either[L, R]` and `Option[T]` with match expression generation
+- **Tuple types**: `(A, B, C)` with destructuring support
+- **Struct witnesses**: Custom witness structs with field access
 - **Jet functions**: `jet.BIP340Verify`, `jet.SigAllHash`, SHA-256 operations, comparisons
 
 ### Example: Working P2PK Contract
@@ -54,6 +57,65 @@ fn main() {
 }
 ```
 
+### Example: Working HTLC Contract
+
+**Input Go Code:**
+
+```go
+package main
+
+import "simplicity/jet"
+
+const RecipientPubkey = 0x9bef8d556d80e43ae7e0becb3f7de6b4...
+const SenderPubkey = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8...
+const HashLock = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6...
+
+type HTLCWitness struct {
+    IsLeft       bool
+    Preimage     [32]byte
+    RecipientSig [64]byte
+    SenderSig    [64]byte
+}
+
+func main() {
+    var w HTLCWitness
+
+    if w.IsLeft {
+        hash := jet.SHA256Finalize(jet.SHA256Add32(jet.SHA256Init(), w.Preimage))
+        jet.Eq256(hash, HashLock)
+        jet.BIP340Verify(RecipientPubkey, jet.SigAllHash(), w.RecipientSig)
+    } else {
+        jet.BIP340Verify(SenderPubkey, jet.SigAllHash(), w.SenderSig)
+    }
+}
+```
+
+**Generated SimplicityHL:**
+
+```rust
+mod witness {
+    const W: HTLCWitness = /* witness */;
+}
+mod param {
+    const RECIPIENT_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4...;
+    const SENDER_PUBKEY: u256 = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8...;
+    const HASH_LOCK: u256 = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6...;
+}
+
+fn main() {
+    match witness::W {
+        Left => {
+            let hash = jet::sha_256_finalize(jet::sha_256_block(jet::sha_256_iv(), witness::W.preimage));
+            jet::eq_256(hash, param::HASH_LOCK)
+            jet::bip_0340_verify(param::RECIPIENT_PUBKEY, jet::sig_all_hash(), witness::W.recipient_sig)
+        },
+        Right => {
+            jet::bip_0340_verify(param::SENDER_PUBKEY, jet::sig_all_hash(), witness::W.sender_sig)
+        }
+    }
+}
+```
+
 ## Available Jet Functions
 
 | Go Function | Simplicity Jet | Description |
@@ -70,67 +132,31 @@ fn main() {
 | `jet.CurrentIndex()` | `jet::current_index` | Current input index |
 | `jet.LockTime()` | `jet::lock_time` | Transaction locktime |
 
-## Target: Real Simplicity Contracts
+## Sum Types
 
-The goal is to generate contracts like these working Simplicity examples:
+### Either[L, R]
 
-<details>
-<summary>P2PK (Pay to Public Key) - NOW WORKING</summary>
+Represents a choice between two types. Used for contracts with alternative spending paths.
 
-```rust
-mod witness {
-    const SIG: [u8; 64] = /* witness */;
-}
-mod param {
-    const ALICE_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0;
-}
+```go
+// Go syntax
+type Witness Either[CompleteData, CancelData]
 
-fn main() {
-    let msg: u256 = jet::sig_all_hash();
-    jet::bip_0340_verify((param::ALICE_PUBKEY, msg), witness::SIG)
-}
+// Maps to SimplicityHL
+Either<CompleteData, CancelData>
 ```
 
-</details>
+### Option[T]
 
-<details>
-<summary>2-of-3 Multisig (Phase 4)</summary>
+Represents an optional value. Used for optional signatures in multisig.
 
-```rust
-mod witness {
-    const SIGNATURES_2_OF_3: [Option<[u8; 64]>; 3] = [Some(0xd95c15407cda...), None, Some(0x6f0854f1bb0d...)];
-}
-mod param {
-    const ALICE_PUBLIC_KEY: u256 = 0x9bef8d556d80e43a...;
-    const BOB_PUBLIC_KEY: u256 = 0xe37d58a1aae4ba05...;
-    const CHARLIE_PUBLIC_KEY: u256 = 0x688466442a134ee3...;
-}
-fn main() {
-    check2of3multisig([param::ALICE_PUBLIC_KEY, param::BOB_PUBLIC_KEY, param::CHARLIE_PUBLIC_KEY], witness::SIGNATURES_2_OF_3);
-}
+```go
+// Go syntax
+type MaybeSig Option[[64]byte]
+
+// Maps to SimplicityHL
+Option<[u8; 64]>
 ```
-
-</details>
-
-<details>
-<summary>HTLC (Hash Time Locked Contract) (Phase 3)</summary>
-
-```rust
-mod witness {
-    const COMPLETE_OR_CANCEL: Either<(u256, [u8; 64]),[u8; 64]> = Left((0x9bf49a6a0755f953..., 0xddd1b8079208208e...));
-}
-fn main() {
-    match witness::COMPLETE_OR_CANCEL {
-        Left(preimage_and_sig: (u256, Signature)) => {
-            let (preimage, recipient_sig): (u256, Signature) = preimage_and_sig;
-            complete_spend(preimage, recipient_sig);
-        },
-        Right(sender_sig: Signature) => cancel_spend(sender_sig),
-    }
-}
-```
-
-</details>
 
 ## Development Roadmap
 
@@ -147,19 +173,19 @@ fn main() {
 
 **Result:** Successfully transpiling P2PK contracts from Go to working SimplicityHL
 
-### Phase 3: Sum Types & Pattern Matching (NEXT)
+### Phase 3: Sum Types & Pattern Matching - COMPLETE
 
 **Goal:** Generate HTLC and conditional contracts
 
-- [ ] Implement `Either<A, B>` sum types
-- [ ] Add `Option<T>` support
-- [ ] Create `match` expression generation
-- [ ] Handle tuple destructuring
-- [ ] Support complex witness data patterns
+- [x] Implement `Either<A, B>` sum types
+- [x] Add `Option<T>` support
+- [x] Create `match` expression generation from if/else
+- [x] Handle tuple type parsing and generation
+- [x] Support struct-based witness data with field access
 
-**Target:** Successfully transpile HTLC contract with Left/Right paths
+**Result:** Successfully transpiling HTLC contracts with Left/Right spending paths
 
-### Phase 4: Arrays & Multisig
+### Phase 4: Arrays & Multisig (NEXT)
 
 **Goal:** Generate multisig contracts
 
@@ -191,6 +217,9 @@ make build
 # Compile P2PK contract
 ./build/simgo -input examples/p2pk.go -output p2pk.shl
 
+# Compile HTLC contract
+./build/simgo -input examples/htlc.go -output htlc.shl
+
 # Run tests
 make test
 ```
@@ -200,6 +229,9 @@ make test
 ```bash
 # P2PK contract with signature verification
 ./build/simgo -input examples/p2pk.go
+
+# HTLC contract with Left/Right spending paths
+./build/simgo -input examples/htlc.go
 
 # Simple boolean validation
 ./build/simgo -input examples/simple_logic.go
@@ -216,25 +248,31 @@ pkg/
 ├── compiler/       # Validation and orchestration
 ├── jets/           # Jet registry (BIP340, SHA256, etc.)
 ├── transpiler/     # Core Go -> SimplicityHL conversion
+│   ├── transpiler.go  # Main transpiler logic
+│   └── patterns.go    # Pattern matching extraction
 └── types/          # Type mapping system
+    ├── types.go       # Basic type mapping
+    └── either.go      # Sum type definitions
 examples/           # Contract examples
-tests/              # Test suite (17 tests)
+tests/              # Test suite (28 tests)
 ```
 
 ## Contributing
 
-### Current Focus: Phase 3 - Sum Types
+### Current Focus: Phase 4 - Arrays & Multisig
 
-1. **Either<A, B>** - Critical for HTLC contracts
-2. **Option<T>** - For optional signatures in multisig
-3. **Match expressions** - Beyond boolean logic
-4. **Tuple destructuring** - For complex witness data
+1. **Array iteration** - For checking multiple signatures
+2. **Option arrays** - `[Option<Sig>; 3]` for multisig
+3. **Counter logic** - Count valid signatures
+4. **Validation functions** - Complex multi-party verification
 
 ### Key Files
 
 - `pkg/jets/jets.go` - Jet function registry
 - `pkg/types/types.go` - Type system extensions
+- `pkg/types/either.go` - Sum type definitions
 - `pkg/transpiler/transpiler.go` - Pattern matching and code generation
+- `pkg/transpiler/patterns.go` - Match expression extraction
 - `examples/` - Real-world contract examples
 - `tests/` - Comprehensive test coverage
 
@@ -248,6 +286,17 @@ tests/              # Test suite (17 tests)
 ## Test Coverage
 
 ```
+=== Phase 3 Tests ===
+TestEitherTypeParsing    - Either<L, R> parsing
+TestOptionTypeParsing    - Option<T> parsing
+TestTupleTypeParsing     - Tuple type parsing
+TestSumTypeDetection     - Sum type identification
+TestEitherWitness        - Either witness declaration
+TestOptionWitness        - Option witness declaration
+TestMatchExpression      - Match generation from if/else
+TestSimpleHTLCStructure  - HTLC contract structure
+TestMatchArmGeneration   - Match arm code generation
+
 === Phase 2 Tests ===
 TestJetRegistry          - Jet function registry
 TestHexTypeInference     - Automatic hex -> u256/u64/etc
