@@ -74,3 +74,6 @@ docs/generated/
 
 # Editor files
 *.vim
+
+# ai
+/.claude

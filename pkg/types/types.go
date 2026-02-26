@@ -30,6 +30,10 @@ func NewTypeMapper() *TypeMapper {
 			"Address":   "u256",
 			"Pubkey":    "u256",
 			"Signature": "[u8; 64]",
+
+			// Simplicity-specific types
+			"Ctx8": "Ctx8", // SHA-256 context
+			"u256": "u256", // Explicit 256-bit type
 		},
 	}
 }
@@ -206,4 +210,39 @@ func (tm *TypeMapper) SupportedTypes() []string {
 		types = append(types, goType)
 	}
 	return types
+}
+
+// InferHexType infers the Simplicity type from a hex literal value
+func (tm *TypeMapper) InferHexType(hexValue string) string {
+	// Remove 0x prefix
+	hex := hexValue
+	if len(hex) >= 2 && (hex[:2] == "0x" || hex[:2] == "0X") {
+		hex = hex[2:]
+	}
+
+	// Calculate byte count (2 hex chars = 1 byte)
+	byteCount := len(hex) / 2
+
+	switch byteCount {
+	case 1:
+		return "u8"
+	case 2:
+		return "u16"
+	case 4:
+		return "u32"
+	case 8:
+		return "u64"
+	case 16:
+		return "u128"
+	case 32:
+		return "u256"
+	case 64:
+		return "[u8; 64]" // For signatures
+	default:
+		// For non-standard sizes, use byte arrays
+		if byteCount > 0 {
+			return fmt.Sprintf("[u8; %d]", byteCount)
+		}
+		return "u256" // Default for hex literals
+	}
 }

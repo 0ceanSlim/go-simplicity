@@ -103,6 +103,12 @@ func (v *goValidator) visit(n ast.Node) bool {
 		v.errors = append(v.errors, "maps are not supported in Simplicity")
 		return false
 	case *ast.CallExpr:
+		// Allow jet.X() calls
+		if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "jet" {
+				return true // Valid jet call, continue validation
+			}
+		}
 		// Check for make() calls
 		if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "make" {
 			if len(node.Args) > 0 {

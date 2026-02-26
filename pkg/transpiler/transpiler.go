@@ -7,16 +7,29 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/0ceanslim/go-simplicity/pkg/jets"
 	simplicity_types "github.com/0ceanslim/go-simplicity/pkg/types"
 )
 
 // Transpiler converts Go AST to SimplicityHL
 type Transpiler struct {
 	typeMapper    *simplicity_types.TypeMapper
+	jetRegistry   *jets.JetRegistry
 	output        strings.Builder
 	witnessValues []WitnessValue
 	constants     []Constant
 	functions     []Function
+	jetCalls      []JetCall // Track jet calls for code generation
+	mainBodyStmts []string  // Store main function body statements
+}
+
+// JetCall represents a jet function call in the code
+type JetCall struct {
+	VarName    string // Variable name being assigned (empty if inline)
+	JetName    string // Simplicity jet name
+	Args       string // Comma-separated arguments
+	ReturnType string // Return type from jet registry
+	IsWitness  bool   // True if argument should come from witness
 }
 
 type WitnessValue struct {
@@ -46,7 +59,8 @@ type Parameter struct {
 // New creates a new transpiler instance
 func New() *Transpiler {
 	return &Transpiler{
-		typeMapper: simplicity_types.NewTypeMapper(),
+		typeMapper:  simplicity_types.NewTypeMapper(),
+		jetRegistry: jets.NewRegistry(),
 	}
 }
 
@@ -56,6 +70,8 @@ func (t *Transpiler) ToSimplicityHL(file *ast.File, fset *token.FileSet) (string
 	t.witnessValues = nil
 	t.constants = nil
 	t.functions = nil
+	t.jetCalls = nil
+	t.mainBodyStmts = nil
 
 	// Phase 1: Analyze the code and extract all computable values
 	if err := t.analyzeCode(file); err != nil {
@@ -103,6 +119,21 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 				for _, spec := range genDecl.Specs {
 					if valueSpec, ok := spec.(*ast.ValueSpec); ok {
 						for i, name := range valueSpec.Names {
+							// Check if this is a witness variable (array type with no value)
+							if valueSpec.Type != nil && len(valueSpec.Values) == 0 {
+								// This is a witness declaration like "var sig [64]byte"
+								simplicityType, err := t.typeMapper.MapGoType(valueSpec.Type)
+								if err != nil {
+									return err
+								}
+								t.witnessValues = append(t.witnessValues, WitnessValue{
+									Name:  strings.ToUpper(t.toSnakeCase(name.Name)),
+									Type:  simplicityType,
+									Value: "/* witness */",
+								})
+								continue
+							}
+
 							if i < len(valueSpec.Values) {
 								// Try to evaluate the expression at compile time
 								value, err := t.evaluateExpression(valueSpec.Values[i])
@@ -133,6 +164,40 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 			// Handle := assignments
 			if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
 				if ident, ok := s.Lhs[0].(*ast.Ident); ok {
+					// Check if RHS is a jet call
+					if callExpr, ok := s.Rhs[0].(*ast.CallExpr); ok {
+						if sel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+							if selIdent, ok := sel.X.(*ast.Ident); ok && selIdent.Name == "jet" {
+								// This is a jet call assignment: varName := jet.X()
+								jetName := sel.Sel.Name
+								jetInfo, found := t.jetRegistry.Lookup(jetName)
+								if !found {
+									return fmt.Errorf("unknown jet function: jet.%s", jetName)
+								}
+
+								// Evaluate arguments
+								var argStrs []string
+								for _, arg := range callExpr.Args {
+									argStr, err := t.evaluateExpression(arg)
+									if err != nil {
+										return err
+									}
+									argStrs = append(argStrs, argStr)
+								}
+
+								// Record the jet call
+								t.jetCalls = append(t.jetCalls, JetCall{
+									VarName:    t.toSnakeCase(ident.Name),
+									JetName:    jetInfo.SimplicityName,
+									Args:       strings.Join(argStrs, ", "),
+									ReturnType: jetInfo.ReturnType,
+								})
+								continue
+							}
+						}
+					}
+
+					// Regular assignment
 					value, err := t.evaluateExpression(s.Rhs[0])
 					if err != nil {
 						return fmt.Errorf("failed to evaluate assignment for %s: %w", ident.Name, err)
@@ -145,10 +210,76 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 					})
 				}
 			}
+		case *ast.ExprStmt:
+			// Handle standalone jet calls like jet.BIP340Verify(...)
+			if callExpr, ok := s.X.(*ast.CallExpr); ok {
+				if sel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+					if selIdent, ok := sel.X.(*ast.Ident); ok && selIdent.Name == "jet" {
+						// This is a standalone jet call: jet.X(...)
+						jetName := sel.Sel.Name
+						jetInfo, found := t.jetRegistry.Lookup(jetName)
+						if !found {
+							return fmt.Errorf("unknown jet function: jet.%s", jetName)
+						}
+
+						// Evaluate arguments
+						var argStrs []string
+						for _, arg := range callExpr.Args {
+							argStr, err := t.evaluateJetArg(arg)
+							if err != nil {
+								return err
+							}
+							argStrs = append(argStrs, argStr)
+						}
+
+						// Record the jet call without assignment
+						t.jetCalls = append(t.jetCalls, JetCall{
+							VarName:    "",
+							JetName:    jetInfo.SimplicityName,
+							Args:       strings.Join(argStrs, ", "),
+							ReturnType: jetInfo.ReturnType,
+						})
+					}
+				}
+			}
 		}
 	}
 
 	return nil
+}
+
+// evaluateJetArg evaluates an argument to a jet call, handling various cases
+func (t *Transpiler) evaluateJetArg(arg ast.Expr) (string, error) {
+	switch a := arg.(type) {
+	case *ast.Ident:
+		// Check if it's a known constant
+		for _, c := range t.constants {
+			if strings.EqualFold(c.Name, strings.ToUpper(t.toSnakeCase(a.Name))) {
+				return fmt.Sprintf("param::%s", strings.ToUpper(t.toSnakeCase(a.Name))), nil
+			}
+		}
+		// Check if it's a witness value
+		for _, w := range t.witnessValues {
+			if strings.EqualFold(strings.ToUpper(w.Name), strings.ToUpper(t.toSnakeCase(a.Name))) {
+				return fmt.Sprintf("witness::%s", strings.ToUpper(t.toSnakeCase(a.Name))), nil
+			}
+		}
+		// Check if it's a local variable from a jet call
+		for _, jc := range t.jetCalls {
+			if jc.VarName == t.toSnakeCase(a.Name) {
+				return jc.VarName, nil
+			}
+		}
+		// Return as-is (might be a parameter name or local var)
+		return t.toSnakeCase(a.Name), nil
+	case *ast.BasicLit:
+		if a.Kind == token.INT && strings.HasPrefix(a.Value, "0x") {
+			return t.evaluateHexLiteral(a.Value)
+		}
+		return a.Value, nil
+	default:
+		return t.evaluateExpression(arg)
+	}
 }
 
 func (t *Transpiler) analyzeFunction(funcDecl *ast.FuncDecl) error {
@@ -250,6 +381,11 @@ func (t *Transpiler) analyzeConstants(genDecl *ast.GenDecl) error {
 							return err
 						}
 						typ = simplicityType
+					} else {
+						// Infer type from hex literals
+						if strings.HasPrefix(value, "0x") {
+							typ = t.typeMapper.InferHexType(value)
+						}
 					}
 
 					t.constants = append(t.constants, Constant{
@@ -267,6 +403,10 @@ func (t *Transpiler) analyzeConstants(genDecl *ast.GenDecl) error {
 func (t *Transpiler) evaluateExpression(expr ast.Expr) (string, error) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
+		// Check for hex literals
+		if e.Kind == token.INT && strings.HasPrefix(e.Value, "0x") {
+			return t.evaluateHexLiteral(e.Value)
+		}
 		return e.Value, nil
 	case *ast.BinaryExpr:
 		return t.evaluateBinaryExpr(e)
@@ -286,10 +426,39 @@ func (t *Transpiler) evaluateExpression(expr ast.Expr) (string, error) {
 	case *ast.Ident:
 		// Return placeholder for identifiers
 		return "true", nil
+	case *ast.SelectorExpr:
+		// Handle jet.X() calls where we just need to return the selector
+		if ident, ok := e.X.(*ast.Ident); ok {
+			return fmt.Sprintf("%s.%s", ident.Name, e.Sel.Name), nil
+		}
 	}
 
 	// If we can't evaluate it, return a default
 	return "true", nil
+}
+
+// evaluateHexLiteral processes hex literals and normalizes them
+func (t *Transpiler) evaluateHexLiteral(value string) (string, error) {
+	// Validate hex literal
+	if !strings.HasPrefix(value, "0x") && !strings.HasPrefix(value, "0X") {
+		return "", fmt.Errorf("invalid hex literal: %s", value)
+	}
+
+	// Remove the 0x prefix for validation
+	hexPart := value[2:]
+	if len(hexPart) == 0 {
+		return "", fmt.Errorf("empty hex literal")
+	}
+
+	// Validate hex characters
+	for _, c := range hexPart {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return "", fmt.Errorf("invalid hex character in literal: %c", c)
+		}
+	}
+
+	// Normalize to lowercase 0x prefix
+	return "0x" + strings.ToLower(hexPart), nil
 }
 
 func (t *Transpiler) evaluateBinaryExpr(expr *ast.BinaryExpr) (string, error) {
@@ -334,6 +503,13 @@ func (t *Transpiler) evaluateBinaryExpr(expr *ast.BinaryExpr) (string, error) {
 }
 
 func (t *Transpiler) evaluateCallExpr(expr *ast.CallExpr) (string, error) {
+	// Check for jet.X() calls (SelectorExpr)
+	if sel, ok := expr.Fun.(*ast.SelectorExpr); ok {
+		if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "jet" {
+			return t.evaluateJetCall(sel.Sel.Name, expr.Args)
+		}
+	}
+
 	// For function calls, we need to evaluate them based on their logic
 	if ident, ok := expr.Fun.(*ast.Ident); ok {
 		funcName := ident.Name
@@ -349,6 +525,31 @@ func (t *Transpiler) evaluateCallExpr(expr *ast.CallExpr) (string, error) {
 		return "true", nil
 	}
 	return "true", nil
+}
+
+// evaluateJetCall handles jet.X() function calls
+func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, error) {
+	// Look up the jet in the registry
+	jetInfo, found := t.jetRegistry.Lookup(jetName)
+	if !found {
+		return "", fmt.Errorf("unknown jet function: jet.%s", jetName)
+	}
+
+	// Evaluate arguments
+	var argStrs []string
+	for _, arg := range args {
+		argStr, err := t.evaluateExpression(arg)
+		if err != nil {
+			return "", fmt.Errorf("failed to evaluate jet argument: %w", err)
+		}
+		argStrs = append(argStrs, argStr)
+	}
+
+	// Return the jet call syntax for SimplicityHL
+	if len(argStrs) == 0 {
+		return fmt.Sprintf("jet::%s()", jetInfo.SimplicityName), nil
+	}
+	return fmt.Sprintf("jet::%s(%s)", jetInfo.SimplicityName, strings.Join(argStrs, ", ")), nil
 }
 
 func (t *Transpiler) extractIdentifier(expr ast.Expr) string {
@@ -420,6 +621,30 @@ func (t *Transpiler) generateFunction(function Function) {
 func (t *Transpiler) generateMainFunction() {
 	t.writeLine("fn main() {")
 
+	// If we have jet calls, generate them in the main function
+	if len(t.jetCalls) > 0 {
+		for _, jc := range t.jetCalls {
+			if jc.VarName != "" {
+				// This is an assignment: let varName: type = jet::name(args)
+				if jc.Args == "" {
+					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s();", jc.VarName, jc.ReturnType, jc.JetName))
+				} else {
+					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s(%s);", jc.VarName, jc.ReturnType, jc.JetName, jc.Args))
+				}
+			} else {
+				// This is a standalone call (like BIP340Verify)
+				if jc.Args == "" {
+					t.writeLine(fmt.Sprintf("    jet::%s()", jc.JetName))
+				} else {
+					// For BIP340Verify and similar, format with tuple syntax
+					t.writeLine(fmt.Sprintf("    jet::%s(%s)", jc.JetName, jc.formatBIP340Args()))
+				}
+			}
+		}
+		t.writeLine("}")
+		return
+	}
+
 	// Generate a simple assertion based on the main logic
 	// Look for boolean witness values that represent the final result
 	var resultWitness string
@@ -466,6 +691,18 @@ func (t *Transpiler) generateMainFunction() {
 	}
 
 	t.writeLine("}")
+}
+
+// formatBIP340Args formats arguments for BIP340Verify with proper tuple syntax
+func (jc *JetCall) formatBIP340Args() string {
+	// Split the args by comma
+	args := strings.Split(jc.Args, ", ")
+	if len(args) != 3 {
+		return jc.Args
+	}
+
+	// BIP340Verify expects ((pubkey, msg), sig) format
+	return fmt.Sprintf("(%s, %s), %s", args[0], args[1], args[2])
 }
 
 func (t *Transpiler) toSnakeCase(name string) string {

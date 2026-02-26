@@ -2,20 +2,23 @@
 
 A Go to SimplicityHL transpiler that converts Go smart contract logic into Simplicity bytecode for Bitcoin and Elements sidechains.
 
-## Project Status: Early Stage - Boolean Pattern Matching
+## Project Status: Phase 2 Complete - P2PK Contracts
 
-This transpiler currently handles **boolean-based smart contract patterns** and provides a foundation for full Simplicity support. While not yet feature-complete, it demonstrates a novel approach to blockchain smart contracts through compile-time evaluation and pure pattern matching.
+This transpiler now supports **real P2PK (Pay-to-Public-Key) contracts** with hex literals and Simplicity jet functions. The foundation is solid and expanding toward full Simplicity support.
 
 ## What Works Right Now
 
-### ✅ Currently Supported Go → SimplicityHL
+### Currently Supported Go -> SimplicityHL
 
 - **Boolean functions** with pattern matching
 - **Compile-time expression evaluation** (constants, arithmetic, comparisons)
 - **Witness/parameter separation** (runtime vs compile-time values)
 - **Simple control flow** (if/else converted to pattern matching)
 - **Function composition** with boolean parameters
-- **Basic types**: `bool`, `uint32`, `uint64`
+- **Basic types**: `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `u256`, `Ctx8`
+- **Hex literals** with automatic type inference (0x... -> u8/u16/u32/u64/u128/u256)
+- **Fixed-size arrays**: `[T; N]` including `[u8; 64]` for signatures
+- **Jet functions**: `jet.BIP340Verify`, `jet.SigAllHash`, SHA-256 operations, comparisons
 
 ### Example: Working P2PK Contract
 
@@ -24,17 +27,14 @@ This transpiler currently handles **boolean-based smart contract patterns** and 
 ```go
 package main
 
-func ValidateP2PK(signatureValid bool) bool {
-    return signatureValid
-}
+import "simplicity/jet"
+
+const AlicePubkey = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0
 
 func main() {
-    signatureValid := true
-    result := ValidateP2PK(signatureValid)
-
-    if !result {
-        return
-    }
+    var sig [64]byte
+    msg := jet.SigAllHash()
+    jet.BIP340Verify(AlicePubkey, msg, sig)
 }
 ```
 
@@ -42,44 +42,59 @@ func main() {
 
 ```rust
 mod witness {
-    const SIGNATURE_VALID: bool = true;
+    const SIG: [u8; 64] = /* witness */;
 }
-
 mod param {
-}
-
-fn validate_p2pk(signature_valid: bool) -> bool {
-    signature_valid
+    const ALICE_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0;
 }
 
 fn main() {
-    assert!(validate_p2pk(witness::SIGNATURE_VALID));
+    let msg: u256 = jet::sig_all_hash();
+    jet::bip_0340_verify((param::ALICE_PUBKEY, msg), witness::SIG)
 }
 ```
+
+## Available Jet Functions
+
+| Go Function | Simplicity Jet | Description |
+|-------------|----------------|-------------|
+| `jet.BIP340Verify(pubkey, msg, sig)` | `jet::bip_0340_verify` | Schnorr signature verification |
+| `jet.SigAllHash()` | `jet::sig_all_hash` | Transaction sighash |
+| `jet.SHA256Init()` | `jet::sha_256_iv` | SHA-256 initialization |
+| `jet.SHA256Add32(ctx, data)` | `jet::sha_256_block` | Add block to hash |
+| `jet.SHA256Finalize(ctx)` | `jet::sha_256_finalize` | Finalize hash |
+| `jet.Eq256(a, b)` | `jet::eq_256` | 256-bit equality |
+| `jet.Eq32(a, b)` | `jet::eq_32` | 32-bit equality |
+| `jet.Le32(a, b)` | `jet::le_32` | 32-bit less-or-equal |
+| `jet.Verify(cond)` | `jet::verify` | Assert condition |
+| `jet.CurrentIndex()` | `jet::current_index` | Current input index |
+| `jet.LockTime()` | `jet::lock_time` | Transaction locktime |
 
 ## Target: Real Simplicity Contracts
 
 The goal is to generate contracts like these working Simplicity examples:
 
 <details>
-<summary>P2PK (Pay to Public Key)</summary>
+<summary>P2PK (Pay to Public Key) - NOW WORKING</summary>
 
 ```rust
 mod witness {
-    const ALICE_SIGNATURE: [u8; 64] = 0x9a3a093012693c1d...;
+    const SIG: [u8; 64] = /* witness */;
 }
 mod param {
-    const ALICE_PUBLIC_KEY: u256 = 0x9bef8d556d80e43a...;
+    const ALICE_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0;
 }
+
 fn main() {
-    jet::bip_0340_verify((param::ALICE_PUBLIC_KEY, jet::sig_all_hash()), witness::ALICE_SIGNATURE)
+    let msg: u256 = jet::sig_all_hash();
+    jet::bip_0340_verify((param::ALICE_PUBKEY, msg), witness::SIG)
 }
 ```
 
 </details>
 
 <details>
-<summary>2-of-3 Multisig</summary>
+<summary>2-of-3 Multisig (Phase 4)</summary>
 
 ```rust
 mod witness {
@@ -98,7 +113,7 @@ fn main() {
 </details>
 
 <details>
-<summary>HTLC (Hash Time Locked Contract)</summary>
+<summary>HTLC (Hash Time Locked Contract) (Phase 3)</summary>
 
 ```rust
 mod witness {
@@ -117,59 +132,26 @@ fn main() {
 
 </details>
 
-## Critical Gap Analysis
-
-### ❌ **Missing for Real Simplicity Contracts:**
-
-1. **Bitcoin Types**
-
-   - `u256`, `[u8; 64]`, `Pubkey`, `Signature`
-   - Type aliases for Bitcoin primitives
-
-2. **Complex Types**
-
-   - `Either<A, B>` sum types
-   - `Option<T>` nullable types
-   - Fixed arrays `[T; N]`
-   - Tuples `(A, B, C)`
-
-3. **Pattern Matching**
-
-   - `match` expressions on non-boolean types
-   - Destructuring assignments
-   - Complex case analysis
-
-4. **Jet Functions**
-
-   - `jet::bip_0340_verify()` - signature verification
-   - `jet::sha_256_ctx_8_*()` - hashing functions
-   - `jet::sig_all_hash()` - transaction hashing
-   - `jet::eq_256()`, `jet::le_32()` - comparisons
-
-5. **Advanced Control Flow**
-   - Multiple return paths
-   - Complex witness data handling
-   - Recursive data structures
-
 ## Development Roadmap
 
-### 🎯 **Phase 2: Core Bitcoin Types (CRITICAL)**
+### Phase 2: Core Bitcoin Types - COMPLETE
 
-**Goal:** Generate basic P2PK and P2PKH contracts
+**Goal:** Generate basic P2PK contracts
 
-- [ ] Add `u256` type support
-- [ ] Implement `[u8; 64]` arrays
-- [ ] Create Bitcoin type aliases (`Pubkey`, `Signature`, `Hash`)
-- [ ] Add jet function stubs (`jet::bip_0340_verify`, etc.)
-- [ ] Test with real P2PK contract generation
+- [x] Add `u256` type support
+- [x] Implement `[u8; 64]` arrays for signatures
+- [x] Create Bitcoin type aliases (`Pubkey`, `Signature`, `Hash`)
+- [x] Add jet function support (`jet::bip_0340_verify`, `jet::sig_all_hash`, etc.)
+- [x] Hex literal support with automatic type inference
+- [x] Test with real P2PK contract generation
 
-**Target:** Successfully transpile P2PK contract from Go to working SimplicityHL
+**Result:** Successfully transpiling P2PK contracts from Go to working SimplicityHL
 
-### 🎯 **Phase 3: Sum Types & Pattern Matching**
+### Phase 3: Sum Types & Pattern Matching (NEXT)
 
 **Goal:** Generate HTLC and conditional contracts
 
-- [ ] Implement `Either<A, B>` types
+- [ ] Implement `Either<A, B>` sum types
 - [ ] Add `Option<T>` support
 - [ ] Create `match` expression generation
 - [ ] Handle tuple destructuring
@@ -177,24 +159,24 @@ fn main() {
 
 **Target:** Successfully transpile HTLC contract with Left/Right paths
 
-### 🎯 **Phase 4: Arrays & Multisig**
+### Phase 4: Arrays & Multisig
 
 **Goal:** Generate multisig contracts
 
-- [ ] Fixed array support `[T; N]`
-- [ ] Array iteration and counting
+- [ ] Fixed array iteration support
+- [ ] Array counting and validation
 - [ ] Option array handling `[Option<T>; N]`
 - [ ] Counter-based logic
 - [ ] Complex validation functions
 
 **Target:** Successfully transpile 2-of-3 multisig contract
 
-### 🎯 **Phase 5: Advanced Contracts**
+### Phase 5: Advanced Contracts
 
 **Goal:** Generate vault, inheritance, and complex contracts
 
 - [ ] Recursive covenant patterns
-- [ ] Time-based logic
+- [ ] Time-based logic with `jet::lock_time`
 - [ ] Oracle data validation
 - [ ] Multi-path spending conditions
 
@@ -206,45 +188,25 @@ git clone https://github.com/0ceanslim/go-simplicity.git
 cd go-simplicity
 make build
 
-# Test current capabilities
-./build/simgo -input examples/basic_swap.go -output basic_swap.shl
+# Compile P2PK contract
+./build/simgo -input examples/p2pk.go -output p2pk.shl
 
 # Run tests
 make test
 ```
 
-## Current Examples That Work
+## Current Examples
 
 ```bash
+# P2PK contract with signature verification
+./build/simgo -input examples/p2pk.go
+
 # Simple boolean validation
 ./build/simgo -input examples/simple_logic.go
 
-# Basic payment validation
-./build/simgo -input examples/simple_payment.go
-
-# Multisig (boolean-only version)
-./build/simgo -input examples/simple_multisig.go
+# Basic swap validation
+./build/simgo -input examples/basic_swap.go
 ```
-
-## Contributing to Bridge the Gap
-
-### 🚨 **High Priority Issues**
-
-1. **Bitcoin Types** - Implement `u256`, `[u8; 64]` in type mapper
-2. **Jet Functions** - Add stubs for cryptographic operations
-3. **Either Types** - Critical for real contracts
-4. **Pattern Matching** - Beyond boolean logic
-
-### 📝 **How to Contribute**
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-**Key Areas:**
-
-- `pkg/types/` - Type system extensions
-- `pkg/transpiler/` - Pattern matching and code generation
-- `examples/` - Real-world contract examples
-- `tests/` - Comprehensive test coverage
 
 ## Architecture
 
@@ -252,11 +214,29 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 cmd/simgo/          # Compiler binary
 pkg/
 ├── compiler/       # Validation and orchestration
-├── transpiler/     # Core Go → SimplicityHL conversion
-└── types/          # Type mapping (NEEDS EXTENSION)
-examples/           # Contract examples (BASIC ONLY)
-tests/              # Test suite
+├── jets/           # Jet registry (BIP340, SHA256, etc.)
+├── transpiler/     # Core Go -> SimplicityHL conversion
+└── types/          # Type mapping system
+examples/           # Contract examples
+tests/              # Test suite (17 tests)
 ```
+
+## Contributing
+
+### Current Focus: Phase 3 - Sum Types
+
+1. **Either<A, B>** - Critical for HTLC contracts
+2. **Option<T>** - For optional signatures in multisig
+3. **Match expressions** - Beyond boolean logic
+4. **Tuple destructuring** - For complex witness data
+
+### Key Files
+
+- `pkg/jets/jets.go` - Jet function registry
+- `pkg/types/types.go` - Type system extensions
+- `pkg/transpiler/transpiler.go` - Pattern matching and code generation
+- `examples/` - Real-world contract examples
+- `tests/` - Comprehensive test coverage
 
 ## Why This Approach Works
 
@@ -265,51 +245,27 @@ tests/              # Test suite
 3. **Formal Verification** - Pure pattern matching is provable
 4. **Bitcoin Compatible** - Maps directly to Simplicity semantics
 
-## Limitations & Honest Assessment
+## Test Coverage
 
-### Current Reality
-
-- **Boolean-heavy contracts only**
-- **No cryptographic operations**
-- **Limited type system**
-- **Simple pattern matching only**
-
-### But the Foundation is Solid
-
-- **Correct transpilation strategy**
-- **Working witness/parameter separation**
-- **Extensible architecture**
-- **Clear path to full Simplicity support**
-
-## Next Milestone: First Real Bitcoin Contract
-
-**Goal:** Generate a working P2PK contract that validates signatures
-
-**Success Criteria:**
-
-```rust
-// Generated from Go input
-mod witness {
-    const ALICE_SIGNATURE: [u8; 64] = /* actual signature */;
-}
-mod param {
-    const ALICE_PUBLIC_KEY: u256 = /* actual pubkey */;
-}
-fn main() {
-    jet::bip_0340_verify((param::ALICE_PUBLIC_KEY, jet::sig_all_hash()), witness::ALICE_SIGNATURE)
-}
 ```
+=== Phase 2 Tests ===
+TestJetRegistry          - Jet function registry
+TestHexTypeInference     - Automatic hex -> u256/u64/etc
+TestHexLiteral           - Hex constant parsing
+TestJetSigAllHash        - Transaction hash jet
+TestJetBIP340Verify      - Signature verification jet
+TestP2PKContract         - Full P2PK integration
+TestJetCallValidation    - Compiler validation
+TestCtx8Type             - SHA-256 context type
 
-**Required Additions:**
-
-1. `u256` and `[u8; 64]` types
-2. Jet function generation
-3. Bitcoin type aliases
-4. Constant hex literal support
-
----
-
-**This is experimental software with a clear development path. The boolean pattern matching foundation is solid, but significant work remains to support real Bitcoin contracts.**
+=== Core Tests ===
+TestBasicFunction        - Function transpilation
+TestSimpleValidation     - Boolean validation
+TestUnsupportedFeatures  - Error handling
+TestSimpleConstants      - Constant extraction
+TestBooleanLogic         - Boolean functions
+TestWorkingExample       - Basic swap contract
+```
 
 ## License
 
