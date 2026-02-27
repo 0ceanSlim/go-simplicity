@@ -2,32 +2,55 @@
 
 A Go to SimplicityHL transpiler that converts Go smart contract logic into Simplicity bytecode for Bitcoin and Elements sidechains.
 
-## Project Status: Phase 4 Complete - Multisig Contracts
+## Project Status: Phase 5 Complete
 
-This transpiler now supports **2-of-3 Multisig Contracts** with Option arrays, counter accumulation, and pattern matching. Building toward full Simplicity support for production contracts.
+**Working contract types:** P2PK, HTLC, 2-of-3 Multisig, arithmetic/comparison contracts.
 
-## What Works Right Now
+See [ROADMAP.md](ROADMAP.md) for the full development plan.
 
-### Currently Supported Go -> SimplicityHL
+---
+
+## What Works
 
 - **Boolean functions** with pattern matching
-- **Compile-time expression evaluation** (constants, arithmetic, comparisons)
-- **Witness/parameter separation** (runtime vs compile-time values)
-- **Control flow** (if/else converted to match expressions)
+- **Witness/parameter separation** — runtime vs compile-time values
+- **Control flow** — `if/else` converted to match expressions
 - **Function composition** with boolean parameters
-- **Basic types**: `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `u256`, `Ctx8`
-- **Hex literals** with automatic type inference (0x... -> u8/u16/u32/u64/u128/u256)
+- **Types**: `bool`, `uint8`, `uint16`, `uint32`, `uint64`, `u256`, `Ctx8`
+- **Hex literals** with automatic type inference (`0x...` → `u8`/`u16`/`u32`/`u64`/`u128`/`u256`)
 - **Fixed-size arrays**: `[T; N]` including `[u8; 64]` for signatures
 - **Sum types**: `Either[L, R]` and `Option[T]` with match expression generation
-- **Tuple types**: `(A, B, C)` with destructuring support
-- **Struct witnesses**: Custom witness structs with field access
-- **Option pattern structs**: Structs with `IsSome bool` + `Value T` auto-detect as `Option<T>`
+- **Tuple types** with destructuring support
+- **Struct witnesses** with field access
+- **Option pattern structs**: `IsSome bool` + `Value T` auto-detects as `Option<T>`
 - **Counter accumulation**: Multiple match expressions compile to counting logic
-- **Jet functions**: `jet.BIP340Verify`, `jet.SigAllHash`, SHA-256 operations, comparisons, `jet.Verify`
+- **Arithmetic operators**: `+`, `-`, `*`, `/`, `%` auto-map to the correct `add_N`/`subtract_N`/etc. jet
+- **Comparison operators**: `<`, `<=`, `>`, `>=`, `==` auto-map to `lt_N`/`le_N`/`eq_N` jets (args swapped where needed)
+- **Bitwise operators**: `&`, `|`, `^` auto-map to `and_N`/`or_N`/`xor_N` jets
+- **Carry-bit destructuring**: arithmetic jets returning `(bool, uN)` emit `let (_, v): (bool, u32) = jet::add_32(...)`
 
-### Example: Working P2PK Contract
+---
 
-**Input Go Code:**
+## Quick Start
+
+```bash
+git clone https://github.com/0ceanslim/go-simplicity.git
+cd go-simplicity
+go build -o build/simgo cmd/simgo/main.go
+
+./build/simgo -input examples/p2pk.go
+./build/simgo -input examples/htlc.go
+./build/simgo -input examples/multisig.go
+./build/simgo -input examples/amount_check.go
+
+go test ./...
+```
+
+---
+
+## Examples
+
+### P2PK — Pay to Public Key
 
 ```go
 package main
@@ -47,7 +70,7 @@ func main() {
 
 ```rust
 mod witness {
-    const SIG: [u8; 64] = 0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
+    const SIG: [u8; 64] = 0x0000...0000;
 }
 mod param {
     const ALICE_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0;
@@ -59,11 +82,11 @@ fn main() {
 }
 ```
 
-> **Note:** Witness values are initialized to zero-value placeholders. Replace `SIG` with a real BIP-340 Schnorr signature before execution — the zero placeholder is syntactically valid but will fail signature verification at runtime.
+> **Playground-ready version:** `examples/testable/p2pk_testable.go` uses a real BIP-340 test vector from `pkg/testkeys` — no manual substitution needed.
 
-### Example: Working HTLC Contract
+---
 
-**Input Go Code:**
+### HTLC — Hash Time Lock Contract
 
 ```go
 package main
@@ -71,8 +94,8 @@ package main
 import "simplicity/jet"
 
 const RecipientPubkey = 0x9bef8d556d80e43ae7e0becb3f7de6b4...
-const SenderPubkey = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8...
-const HashLock = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6...
+const SenderPubkey    = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8...
+const HashLock        = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6...
 
 type HTLCWitness struct {
     IsLeft       bool
@@ -83,7 +106,6 @@ type HTLCWitness struct {
 
 func main() {
     var w HTLCWitness
-
     if w.IsLeft {
         hash := jet.SHA256Finalize(jet.SHA256Add32(jet.SHA256Init(), w.Preimage))
         jet.Eq256(hash, HashLock)
@@ -98,12 +120,12 @@ func main() {
 
 ```rust
 mod witness {
-    const W: Either<([u8; 32], [u8; 64]), [u8; 64]> = Left((0x0000000000000000000000000000000000000000000000000000000000000000, 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000));
+    const W: Either<([u8; 32], [u8; 64]), [u8; 64]> = Left((0x0000...0000, 0x0000...0000));
 }
 mod param {
-    const RECIPIENT_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0;
-    const SENDER_PUBKEY: u256 = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4;
-    const HASH_LOCK: u256 = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2;
+    const RECIPIENT_PUBKEY: u256 = 0x9bef...;
+    const SENDER_PUBKEY: u256 = 0xe37d...;
+    const HASH_LOCK: u256 = 0xa1b2...;
 }
 
 fn main() {
@@ -123,18 +145,18 @@ fn main() {
 }
 ```
 
-### Example: Working 2-of-3 Multisig Contract
+---
 
-**Input Go Code:**
+### Multisig — 2-of-3
 
 ```go
 package main
 
 import "simplicity/jet"
 
-const AlicePubkey = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0
-const BobPubkey = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4
-const CharliePubkey = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+const AlicePubkey   = 0x9bef8d556d80e43ae7e0becb3f7de6b4...
+const BobPubkey     = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8...
+const CharliePubkey = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6...
 
 type OptionalSig struct {
     IsSome bool
@@ -146,18 +168,9 @@ func main() {
     msg := jet.SigAllHash()
     validCount := 0
 
-    if sig0.IsSome {
-        jet.BIP340Verify(AlicePubkey, msg, sig0.Value)
-        validCount++
-    }
-    if sig1.IsSome {
-        jet.BIP340Verify(BobPubkey, msg, sig1.Value)
-        validCount++
-    }
-    if sig2.IsSome {
-        jet.BIP340Verify(CharliePubkey, msg, sig2.Value)
-        validCount++
-    }
+    if sig0.IsSome { jet.BIP340Verify(AlicePubkey, msg, sig0.Value);   validCount++ }
+    if sig1.IsSome { jet.BIP340Verify(BobPubkey, msg, sig1.Value);     validCount++ }
+    if sig2.IsSome { jet.BIP340Verify(CharliePubkey, msg, sig2.Value); validCount++ }
 
     jet.Verify(jet.Le32(2, validCount))
 }
@@ -172,302 +185,224 @@ mod witness {
     const SIG2: Option<[u8; 64]> = None;
 }
 mod param {
-    const ALICE_PUBKEY: u256 = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0;
-    const BOB_PUBKEY: u256 = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4;
-    const CHARLIE_PUBKEY: u256 = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2;
+    const ALICE_PUBKEY: u256 = ...;
+    const BOB_PUBKEY: u256 = ...;
+    const CHARLIE_PUBKEY: u256 = ...;
 }
 
 fn main() {
     let msg: u256 = jet::sig_all_hash();
-
-    // Signature verification with counter accumulation
-    let count_0: u32 =
-        match witness::SIG0 {
-            Some(sig) => {
-                jet::bip_0340_verify((param::ALICE_PUBKEY, msg), sig);
-                1
-            },
-            None => 0,
-        };
-    let count_1: u32 = count_0 +
-        match witness::SIG1 {
-            Some(sig) => {
-                jet::bip_0340_verify((param::BOB_PUBKEY, msg), sig);
-                1
-            },
-            None => 0,
-        };
-    let count_2: u32 = count_1 +
-        match witness::SIG2 {
-            Some(sig) => {
-                jet::bip_0340_verify((param::CHARLIE_PUBKEY, msg), sig);
-                1
-            },
-            None => 0,
-        };
-
-    // Require at least 2 valid signatures
+    let count_0: u32 = match witness::SIG0 {
+        Some(sig) => { jet::bip_0340_verify((param::ALICE_PUBKEY, msg), sig); 1 },
+        None => 0,
+    };
+    let count_1: u32 = count_0 + match witness::SIG1 { ... };
+    let count_2: u32 = count_1 + match witness::SIG2 { ... };
     jet::verify(jet::le_32(2, count_2))
 }
 ```
 
-## Available Jet Functions
+---
 
-| Go Function | Simplicity Jet | Description |
-|-------------|----------------|-------------|
-| `jet.BIP340Verify(pubkey, msg, sig)` | `jet::bip_0340_verify` | Schnorr signature verification |
-| `jet.SigAllHash()` | `jet::sig_all_hash` | Transaction sighash |
-| `jet.SHA256Init()` | `jet::sha_256_ctx_8_init` | SHA-256 initialization |
-| `jet.SHA256Add32(ctx, data)` | `jet::sha_256_ctx_8_add_32` | Add 32-byte block to hash |
-| `jet.SHA256Finalize(ctx)` | `jet::sha_256_ctx_8_finalize` | Finalize hash |
-| `jet.CheckLockHeight(h)` | `jet::check_lock_height` | Timelock height check |
-| `jet.Eq256(a, b)` | `jet::eq_256` | 256-bit equality |
-| `jet.Eq32(a, b)` | `jet::eq_32` | 32-bit equality |
-| `jet.Le32(a, b)` | `jet::le_32` | 32-bit less-or-equal |
-| `jet.Verify(cond)` | `jet::verify` | Assert condition |
-| `jet.CurrentIndex()` | `jet::current_index` | Current input index |
-| `jet.LockTime()` | `jet::lock_time` | Transaction locktime |
-| `jet.CurrentPrevOutpoint()` | `jet::current_prev_outpoint` | Current input outpoint |
-| `jet.CurrentScriptHash()` | `jet::current_script_hash` | Current script hash |
+### Amount Check — Arithmetic & Comparison Jets (Phase 5)
+
+```go
+package main
+
+import "simplicity/jet"
+
+const MinBlockHeight uint32 = 800000
+const MaxInputIndex  uint32 = 9
+
+func main() {
+    jet.CheckLockHeight(MinBlockHeight)
+
+    idx     := jet.CurrentIndex()
+    indexOk := idx <= MaxInputIndex   // auto-maps to jet::le_32
+    jet.Verify(indexOk)
+
+    height   := jet.TxLockHeight()
+    heightOk := height >= MinBlockHeight  // auto-maps to jet::le_32 with swapped args
+    jet.Verify(heightOk)
+}
+```
+
+**Generated SimplicityHL:**
+
+```rust
+mod witness {}
+mod param {
+    const MIN_BLOCK_HEIGHT: u32 = 800000;
+    const MAX_INPUT_INDEX: u32 = 9;
+}
+
+fn main() {
+    jet::check_lock_height(param::MIN_BLOCK_HEIGHT)
+    let idx: u32 = jet::current_index();
+    let index_ok: bool = jet::le_32(idx, param::MAX_INPUT_INDEX);
+    jet::verify(index_ok)
+    let height: u32 = jet::tx_lock_height();
+    let height_ok: bool = jet::le_32(param::MIN_BLOCK_HEIGHT, height);
+    jet::verify(height_ok)
+}
+```
+
+---
+
+## Available Jets
+
+### Signature & Hash
+
+| Go Function | Simplicity Jet | Returns |
+|-------------|----------------|---------|
+| `jet.BIP340Verify(pubkey, msg, sig)` | `jet::bip_0340_verify` | — |
+| `jet.SigAllHash()` | `jet::sig_all_hash` | `u256` |
+| `jet.SHA256Init()` | `jet::sha_256_ctx_8_init` | `Ctx8` |
+| `jet.SHA256Add32(ctx, data)` | `jet::sha_256_ctx_8_add_32` | `Ctx8` |
+| `jet.SHA256Finalize(ctx)` | `jet::sha_256_ctx_8_finalize` | `u256` |
+
+### Arithmetic
+
+| Go Function | Simplicity Jet | Returns |
+|-------------|----------------|---------|
+| `jet.Add32(a, b)` | `jet::add_32` | `(bool, u32)` |
+| `jet.Subtract32(a, b)` | `jet::subtract_32` | `(bool, u32)` |
+| `jet.Multiply32(a, b)` | `jet::multiply_32` | `u64` |
+| `jet.Divide32(a, b)` | `jet::divide_32` | `u32` |
+| `jet.Modulo32(a, b)` | `jet::modulo_32` | `u32` |
+| *(8/16/64 variants also registered)* | | |
+
+> Arithmetic operators `+`, `-`, `*`, `/`, `%` in `main()` auto-map to the correct jet based on operand width.
+
+### Comparison
+
+| Go Function | Simplicity Jet | Returns |
+|-------------|----------------|---------|
+| `jet.Lt32(a, b)` | `jet::lt_32` | `bool` |
+| `jet.Le32(a, b)` | `jet::le_32` | `bool` |
+| `jet.Eq32(a, b)` | `jet::eq_32` | `bool` |
+| `jet.Eq256(a, b)` | `jet::eq_256` | `bool` |
+| *(8/16/64 variants also registered)* | | |
+
+> Operators `<`, `<=`, `>`, `>=`, `==` auto-map to the correct jet. `>` and `>=` swap arguments since no `gt`/`ge` jet exists.
+
+### Time Locks
+
+| Go Function | Simplicity Jet |
+|-------------|----------------|
+| `jet.CheckLockHeight(h)` | `jet::check_lock_height` |
+| `jet.CheckLockTime(t)` | `jet::check_lock_time` |
+| `jet.TxLockHeight()` | `jet::tx_lock_height` |
+| `jet.TxLockTime()` | `jet::tx_lock_time` |
+| `jet.TxIsFinal()` | `jet::tx_is_final` |
+| `jet.CheckLockDistance(d)` | `jet::check_lock_distance` |
+| `jet.CheckLockDuration(d)` | `jet::check_lock_duration` |
+
+### Transaction Introspection
+
+| Go Function | Simplicity Jet | Returns |
+|-------------|----------------|---------|
+| `jet.CurrentIndex()` | `jet::current_index` | `u32` |
+| `jet.NumInputs()` | `jet::num_inputs` | `u32` |
+| `jet.NumOutputs()` | `jet::num_outputs` | `u32` |
+| `jet.Version()` | `jet::version` | `u32` |
+| `jet.TransactionId()` | `jet::transaction_id` | `u256` |
+| `jet.CurrentPrevOutpoint()` | `jet::current_prev_outpoint` | `(u256, u32)` |
+| `jet.CurrentScriptHash()` | `jet::current_script_hash` | `u256` |
+| `jet.InternalKey()` | `jet::internal_key` | `u256` |
+| `jet.GenesisBlockHash()` | `jet::genesis_block_hash` | `u256` |
+
+### Utilities
+
+| Go Function | Simplicity Jet |
+|-------------|----------------|
+| `jet.Verify(cond)` | `jet::verify` |
+
+---
 
 ## Sum Types
 
 ### Either[L, R]
 
-Represents a choice between two types. Used for contracts with alternative spending paths.
+Use a struct with `IsLeft bool` — auto-detected as `Either<L, R>`:
 
 ```go
-// Go syntax - struct with IsLeft pattern
-type Witness struct {
-    IsLeft bool
-    Left   CompleteData
-    Right  CancelData
+type HTLCWitness struct {
+    IsLeft       bool
+    Preimage     [32]byte   // Left arm data
+    RecipientSig [64]byte
+    SenderSig    [64]byte   // Right arm data
 }
-
-// Auto-detects and maps to SimplicityHL
-Either<CompleteData, CancelData>
+// → Either<([u8; 32], [u8; 64]), [u8; 64]>
 ```
 
 ### Option[T]
 
-Represents an optional value. Used for optional signatures in multisig.
+Use a struct with `IsSome bool` + `Value T` — auto-detected as `Option<T>`:
 
 ```go
-// Go syntax - struct with IsSome pattern
 type OptionalSig struct {
     IsSome bool
     Value  [64]byte
 }
-
-// Auto-detects and maps to SimplicityHL
-Option<[u8; 64]>
+// → Option<[u8; 64]>
 ```
 
-## Development Roadmap
+---
 
-### Phase 2: Core Bitcoin Types - COMPLETE
+## Testable Examples
 
-**Goal:** Generate basic P2PK contracts
-
-- [x] Add `u256` type support
-- [x] Implement `[u8; 64]` arrays for signatures
-- [x] Create Bitcoin type aliases (`Pubkey`, `Signature`, `Hash`)
-- [x] Add jet function support (`jet::bip_0340_verify`, `jet::sig_all_hash`, etc.)
-- [x] Hex literal support with automatic type inference
-- [x] Test with real P2PK contract generation
-
-**Result:** Successfully transpiling P2PK contracts from Go to working SimplicityHL
-
-### Phase 3: Sum Types & Pattern Matching - COMPLETE
-
-**Goal:** Generate HTLC and conditional contracts
-
-- [x] Implement `Either<A, B>` sum types
-- [x] Add `Option<T>` support
-- [x] Create `match` expression generation from if/else
-- [x] Handle tuple type parsing and generation
-- [x] Support struct-based witness data with field access
-
-**Result:** Successfully transpiling HTLC contracts with Left/Right spending paths
-
-### Phase 4: Arrays & Multisig - COMPLETE
-
-**Goal:** Generate multisig contracts
-
-- [x] Option pattern struct detection (`IsSome bool` + `Value T` -> `Option<T>`)
-- [x] Multiple match expression handling
-- [x] Counter accumulation logic
-- [x] `jet::verify` and `jet::le_32` integration
-- [x] Bounded for loop detection (compiler validation)
-
-**Result:** Successfully transpiling 2-of-3 multisig contracts with counter-based validation
-
-### Phase 5: Advanced Contracts (NEXT)
-
-**Goal:** Generate vault, inheritance, and complex contracts
-
-- [ ] Recursive covenant patterns
-- [ ] Time-based logic with `jet::lock_time`
-- [ ] Oracle data validation
-- [ ] Multi-path spending conditions
-- [ ] Introspection jets for UTXO inspection
-
-## Bug Fixes
-
-Tracked bugs from comparing generated output against the SimplicityHL playground.
-
-- [x] **BUG-1**: SHA-256 jet names wrong — `sha_256_iv` / `sha_256_block` / `sha_256_finalize` should be `sha_256_ctx_8_init` / `sha_256_ctx_8_add_32` / `sha_256_ctx_8_finalize`
-- [x] **BUG-2**: Missing `CheckLockHeight` jet — `jet::check_lock_height` not in registry, needed for timelock contracts
-- [x] **BUG-3**: HTLC Left arm uses `witness::W.field` instead of bound variable — match arms must destructure `data` and use local field names
-- [x] **BUG-4**: HTLC Right arm uses `witness::W.sender_sig` instead of bound `sig` — `varBase` was not passed to the else branch
-- [x] **BUG-5**: `None` match arm wraps value in unnecessary block — `None => { 0 }` should be `None => 0,`
-- [x] **BUG-6**: Jet calls in `Some` match arm body missing semicolons — statements before a return value need `;`
-- [x] **BUG-7**: Witness values use `/* witness */` which is not valid SimplicityHL syntax — each type needs a zero-value placeholder (`None` for Option, `Left(...)` for Either, `0x00...` for byte arrays)
-
-## Known Limitations & Future Work
-
-### Current Limitations
-
-1. **No for loop unrolling** - Bounded loops are detected but not yet fully unrolled
-2. **Single witness struct** - Multiple independent structs may need manual adjustment
-3. **No arithmetic jets** - Addition, multiplication not yet mapped
-4. **No introspection beyond basics** - Limited UTXO introspection jets
-5. **No helper function generation** - All logic emitted inline in `fn main()`; the playground idiom of extracting sub-functions is not yet supported
-6. **No type aliases** - Raw types emitted (`u256`, `[u8; 64]`) rather than named aliases like `Pubkey`, `Signature`
-
-### Recommended Patterns
-
-- Use struct-based Option types with `IsSome bool` + `Value T` fields
-- Use struct-based Either types with `IsLeft bool` + `Left L` + `Right R` fields
-- Define pubkeys as hex constants (`const Pubkey = 0x...`)
-- Use `jet.SigAllHash()` for transaction message hashing
-- Use explicit `jet.Verify()` for final assertions
-
-### Not Yet Supported
-
-- Dynamic arrays or slices
-- String types
-- Maps/dictionaries
-- Recursive function calls
-- Closures or function variables
-- Interface types
-- Goroutines or channels
-- Import statements (except `simplicity/jet`)
-
-## Installation & Usage
+`examples/testable/` contains variants that use real BIP-340 spec test vectors from `pkg/testkeys` — output is immediately paste-able into the [SimplicityHL playground](https://www.wpsoftware.net/elements-playground/) without manual substitution.
 
 ```bash
-# Install
-git clone https://github.com/0ceanslim/go-simplicity.git
-cd go-simplicity
-go build -o build/simgo cmd/simgo/main.go
-
-# Compile P2PK contract
-./build/simgo -input examples/p2pk.go
-
-# Compile HTLC contract
-./build/simgo -input examples/htlc.go
-
-# Compile Multisig contract
-./build/simgo -input examples/multisig.go
-
-# Run tests
-go test ./...
+./build/simgo -input examples/testable/p2pk_testable.go
+./build/simgo -input examples/testable/htlc_testable.go
+./build/simgo -input examples/testable/timelock_check_testable.go
+./build/simgo -input examples/testable/arithmetic_test.go
 ```
 
-## Current Examples
-
-```bash
-# P2PK contract with signature verification
-./build/simgo -input examples/p2pk.go
-
-# HTLC contract with Left/Right spending paths
-./build/simgo -input examples/htlc.go
-
-# 2-of-3 Multisig with optional signatures
-./build/simgo -input examples/multisig.go
-
-# Simple boolean validation
-./build/simgo -input examples/simple_logic.go
-```
+---
 
 ## Architecture
 
 ```
-cmd/simgo/          # Compiler binary
+cmd/simgo/          # CLI binary
 pkg/
 ├── compiler/       # Validation and orchestration
-├── jets/           # Jet registry (BIP340, SHA256, etc.)
-├── transpiler/     # Core Go -> SimplicityHL conversion
-│   ├── transpiler.go  # Main transpiler logic
-│   ├── patterns.go    # Pattern matching extraction
-│   └── arrays.go      # Array handling and loop unrolling
-└── types/          # Type mapping system
-    ├── types.go       # Basic type mapping
-    └── either.go      # Sum type definitions
-examples/           # Contract examples (p2pk, htlc, multisig)
-tests/              # Test suite (41 tests)
+├── jets/           # Jet registry (80+ jets)
+├── transpiler/     # Core Go → SimplicityHL AST walker
+│   ├── transpiler.go   # Main logic (~1500 lines)
+│   ├── patterns.go     # Either/Option match extraction
+│   └── arrays.go       # Fixed-size arrays + loop unrolling
+├── types/          # Type mapping (Go → Simplicity)
+│   ├── types.go
+│   └── either.go
+└── testkeys/       # BIP-340 spec test vectors
+examples/           # Contract examples
+tests/              # 46 tests across all phases
 ```
 
-## Test Coverage
+---
 
-```
-=== Example Integration Tests (3 tests) ===
-TestExampleP2PK            - Compiles p2pk.go, validates witness/param/jet structure
-TestExampleHTLC            - Compiles htlc.go, validates bound vars, destructuring, SHA-256 jets
-TestExampleMultisig        - Compiles multisig.go, validates None arms, semicolons, counters
+## Not Supported
 
-=== Phase 4 Tests (10 tests) ===
-TestArrayTypeParsing       - Array type parsing
-TestOptionArrayDetection   - Option sum type detection
-TestSimpleArrayDeclaration - Array witness declaration
-TestOptionArrayDeclaration - Option array declaration
-TestArrayConstant          - Multiple pubkey constants
-TestBoundedForLoopAllowed  - For loop compiler validation
-TestArrayIndexing          - Array index access
-TestMultiplePubkeyConstants- Multi-pubkey param generation
-TestSimpleMultisigStructure- Multisig contract structure
-TestArrayUnrollFramework   - Loop unroll framework
+- Dynamic arrays / slices
+- Maps, channels, goroutines
+- Interfaces
+- Recursive function calls
+- String types
+- Imports other than `simplicity/jet`
 
-=== Phase 3 Tests (10 tests) ===
-TestEitherTypeParsing      - Either<L, R> parsing
-TestOptionTypeParsing      - Option<T> parsing
-TestTupleTypeParsing       - Tuple type parsing
-TestSumTypeDetection       - Sum type identification
-TestEitherWitness          - Either witness declaration
-TestOptionWitness          - Option witness declaration
-TestMatchExpression        - Match generation from if/else
-TestSimpleHTLCStructure    - HTLC contract structure
-TestGoGenericEitherType    - Go generic type support
-TestMatchArmGeneration     - Match arm code generation
-
-=== Phase 2 Tests (8 tests) ===
-TestJetRegistry            - Jet function registry
-TestHexTypeInference       - Automatic hex -> u256/u64/etc
-TestHexLiteral             - Hex constant parsing
-TestJetSigAllHash          - Transaction hash jet
-TestJetBIP340Verify        - Signature verification jet
-TestP2PKContract           - Full P2PK integration
-TestJetCallValidation      - Compiler validation
-TestCtx8Type               - SHA-256 context type
-
-=== Core Tests (10 tests) ===
-TestBasicFunction          - Function transpilation
-TestSimpleValidation       - Boolean validation
-TestUnsupportedFeatures    - Error handling
-TestSimpleConstants        - Constant extraction
-TestBooleanLogic           - Boolean functions
-TestWorkingExample         - Basic swap contract
-... and more
-```
+---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details.
 
 ## Resources
 
 - [Simplicity Paper](https://blockstream.com/simplicity.pdf)
 - [SimplicityHL Documentation](https://github.com/BlockstreamResearch/SimplicityHL)
+- [SimplicityHL Jet Reference](https://docs.rs/simplicityhl-as-rust/latest/simplicityhl_as_rust/jet/index.html)
 - [Elements Project](https://github.com/ElementsProject/elements)
 - [Liquid Network](https://liquid.net)
