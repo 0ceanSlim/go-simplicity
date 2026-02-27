@@ -27,14 +27,14 @@ type Transpiler struct {
 	witnessValues   []WitnessValue
 	constants       []Constant
 	functions       []Function
-	jetCalls        []JetCall          // Track jet calls for code generation
-	mainBodyStmts   []string           // Store main function body statements
-	matchExprs      []*MatchExpression // Track match expressions
-	hasMatchExpr    bool               // Flag to indicate main has match expression
-	unrolledLoops   []*UnrolledLoop    // Track unrolled for loops
-	hasUnrolledLoop bool               // Flag to indicate main has unrolled loops
-	arrayConstants  []*ArrayConstant   // Track array constants for param module
-	customTypes     map[string]string  // Map custom type names to Simplicity types
+	jetCalls        []JetCall                   // Track jet calls for code generation
+	mainBodyStmts   []string                    // Store main function body statements
+	matchExprs      []*MatchExpression          // Track match expressions
+	hasMatchExpr    bool                        // Flag to indicate main has match expression
+	unrolledLoops   []*UnrolledLoop             // Track unrolled for loops
+	hasUnrolledLoop bool                        // Flag to indicate main has unrolled loops
+	arrayConstants  []*ArrayConstant            // Track array constants for param module
+	customTypes     map[string]string           // Map custom type names to Simplicity types
 	eitherFields    map[string]*EitherFieldInfo // Go struct name → field info for Either types
 }
 

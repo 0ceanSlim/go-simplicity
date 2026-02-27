@@ -77,3 +77,7 @@ docs/generated/
 
 # ai
 /.claude
+
+# build output
+simgo
+simgo.exe
