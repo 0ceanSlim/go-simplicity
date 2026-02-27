@@ -19,7 +19,7 @@ func TestJetRegistry(t *testing.T) {
 	}{
 		{"BIP340Verify", "bip_0340_verify"},
 		{"SigAllHash", "sig_all_hash"},
-		{"SHA256Init", "sha_256_iv"},
+		{"SHA256Init", "sha_256_ctx_8_init"},
 		{"Eq256", "eq_256"},
 		{"Le32", "le_32"},
 	}

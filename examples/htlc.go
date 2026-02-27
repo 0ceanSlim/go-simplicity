@@ -57,7 +57,7 @@ const HashLock = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a
 type HTLCWitness struct {
 	IsLeft bool
 	// Left path: preimage (32 bytes) + signature (64 bytes)
-	Preimage [32]byte
+	Preimage     [32]byte
 	RecipientSig [64]byte
 	// Right path: sender signature (64 bytes)
 	SenderSig [64]byte

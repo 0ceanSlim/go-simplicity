@@ -11,6 +11,14 @@ import (
 	simplicity_types "github.com/0ceanslim/go-simplicity/pkg/types"
 )
 
+// EitherFieldInfo tracks field names for Either struct types
+type EitherFieldInfo struct {
+	LeftFieldNames []string // snake_case names of left branch fields
+	LeftType       string   // combined left type (tuple if multiple)
+	RightFieldName string   // snake_case name of right branch field
+	RightType      string   // right branch type
+}
+
 // Transpiler converts Go AST to SimplicityHL
 type Transpiler struct {
 	typeMapper      *simplicity_types.TypeMapper
@@ -23,6 +31,11 @@ type Transpiler struct {
 	mainBodyStmts   []string           // Store main function body statements
 	matchExprs      []*MatchExpression // Track match expressions
 	hasMatchExpr    bool               // Flag to indicate main has match expression
+	unrolledLoops   []*UnrolledLoop    // Track unrolled for loops
+	hasUnrolledLoop bool               // Flag to indicate main has unrolled loops
+	arrayConstants  []*ArrayConstant   // Track array constants for param module
+	customTypes     map[string]string  // Map custom type names to Simplicity types
+	eitherFields    map[string]*EitherFieldInfo // Go struct name → field info for Either types
 }
 
 // JetCall represents a jet function call in the code
@@ -35,9 +48,10 @@ type JetCall struct {
 }
 
 type WitnessValue struct {
-	Name  string
-	Type  string
-	Value string
+	Name       string
+	Type       string
+	Value      string
+	GoTypeName string // Original Go struct type name, for Either field lookup
 }
 
 type Constant struct {
@@ -61,8 +75,9 @@ type Parameter struct {
 // New creates a new transpiler instance
 func New() *Transpiler {
 	return &Transpiler{
-		typeMapper:  simplicity_types.NewTypeMapper(),
-		jetRegistry: jets.NewRegistry(),
+		typeMapper:   simplicity_types.NewTypeMapper(),
+		jetRegistry:  jets.NewRegistry(),
+		eitherFields: make(map[string]*EitherFieldInfo),
 	}
 }
 
@@ -76,6 +91,11 @@ func (t *Transpiler) ToSimplicityHL(file *ast.File, fset *token.FileSet) (string
 	t.mainBodyStmts = nil
 	t.matchExprs = nil
 	t.hasMatchExpr = false
+	t.unrolledLoops = nil
+	t.hasUnrolledLoop = false
+	t.arrayConstants = nil
+	t.customTypes = make(map[string]string)
+	t.eitherFields = make(map[string]*EitherFieldInfo)
 
 	// Phase 1: Analyze the code and extract all computable values
 	if err := t.analyzeCode(file); err != nil {
@@ -108,6 +128,11 @@ func (t *Transpiler) analyzeCode(file *ast.File) error {
 					return err
 				}
 			}
+			if genDecl.Tok == token.TYPE {
+				if err := t.analyzeTypeDeclarations(genDecl); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -126,14 +151,31 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 							// Check if this is a witness variable (array type with no value)
 							if valueSpec.Type != nil && len(valueSpec.Values) == 0 {
 								// This is a witness declaration like "var sig [64]byte"
-								simplicityType, err := t.typeMapper.MapGoType(valueSpec.Type)
-								if err != nil {
-									return err
+								var simplicityType string
+								var goTypeName string
+
+								// Check if this is a custom type that we've mapped
+								if ident, ok := valueSpec.Type.(*ast.Ident); ok {
+									if customType, found := t.customTypes[ident.Name]; found {
+										simplicityType = customType
+										goTypeName = ident.Name
+									}
 								}
+
+								// If not a custom type, use the type mapper
+								if simplicityType == "" {
+									var err error
+									simplicityType, err = t.typeMapper.MapGoType(valueSpec.Type)
+									if err != nil {
+										return err
+									}
+								}
+
 								t.witnessValues = append(t.witnessValues, WitnessValue{
-									Name:  strings.ToUpper(t.toSnakeCase(name.Name)),
-									Type:  simplicityType,
-									Value: "/* witness */",
+									Name:       strings.ToUpper(t.toSnakeCase(name.Name)),
+									Type:       simplicityType,
+									Value:      generateWitnessPlaceholder(simplicityType),
+									GoTypeName: goTypeName,
 								})
 								continue
 							}
@@ -201,10 +243,15 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 						}
 					}
 
-					// Regular assignment
+					// Regular assignment - but skip counter initializations and local variables
 					value, err := t.evaluateExpression(s.Rhs[0])
 					if err != nil {
 						return fmt.Errorf("failed to evaluate assignment for %s: %w", ident.Name, err)
+					}
+
+					// Skip simple numeric literals (these are local counters, not witnesses)
+					if _, parseErr := strconv.Atoi(value); parseErr == nil {
+						continue // Skip counter initialization like validCount := 0
 					}
 
 					t.witnessValues = append(t.witnessValues, WitnessValue{
@@ -279,6 +326,17 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 				t.matchExprs = append(t.matchExprs, matchExpr)
 				t.hasMatchExpr = true
 			}
+
+		case *ast.ForStmt:
+			// Handle bounded for loops by unrolling them
+			unrolled, err := t.unrollForLoop(s)
+			if err != nil {
+				return err
+			}
+			if unrolled != nil {
+				t.unrolledLoops = append(t.unrolledLoops, unrolled)
+				t.hasUnrolledLoop = true
+			}
 		}
 	}
 
@@ -288,7 +346,7 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 // analyzeIfAsMatch checks if an if statement represents sum type pattern matching
 func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, error) {
 	// Check if condition is checking a sum type field (w.IsLeft, opt.IsSome, etc.)
-	scrutinee, pattern := t.extractSumTypeCondition(ifStmt.Cond)
+	scrutinee, pattern, varBase := t.extractSumTypeCondition(ifStmt.Cond)
 	if scrutinee == "" {
 		return nil, nil // Not a sum type pattern match
 	}
@@ -301,8 +359,17 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 	thenCase := MatchCase{
 		Pattern: pattern,
 	}
+
+	// For Some pattern, add a variable binding
+	if pattern == "Some" {
+		thenCase.VarName = "sig"
+	} else if pattern == "Left" {
+		thenCase.VarName = "data"
+	}
+
+	// Process body statements with bound variable substitution
 	for _, stmt := range ifStmt.Body.List {
-		stmtStr, err := t.analyzeStatement(stmt)
+		stmtStr, err := t.analyzeStatementWithVarBinding(stmt, varBase, thenCase.VarName)
 		if err != nil {
 			return nil, err
 		}
@@ -310,6 +377,17 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 			thenCase.BodyStmts = append(thenCase.BodyStmts, stmtStr)
 		}
 	}
+
+	// For multi-field Left arm, prepend a destructuring statement
+	if pattern == "Left" {
+		fieldInfo := t.getEitherFieldInfo(varBase)
+		if fieldInfo != nil && len(fieldInfo.LeftFieldNames) > 1 {
+			names := "(" + strings.Join(fieldInfo.LeftFieldNames, ", ") + ")"
+			destructure := fmt.Sprintf("let %s: %s = data;", names, fieldInfo.LeftType)
+			thenCase.BodyStmts = append([]string{destructure}, thenCase.BodyStmts...)
+		}
+	}
+
 	match.Cases = append(match.Cases, thenCase)
 
 	// Analyze the "else" branch if present
@@ -319,10 +397,16 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 			Pattern: elsePattern,
 		}
 
+		// For Right pattern, add a variable binding
+		if elsePattern == "Right" {
+			elseCase.VarName = "sig"
+		}
+
 		switch e := ifStmt.Else.(type) {
 		case *ast.BlockStmt:
 			for _, stmt := range e.List {
-				stmtStr, err := t.analyzeStatement(stmt)
+				// Pass varBase so Right arm can substitute witness field accesses
+				stmtStr, err := t.analyzeStatementWithVarBinding(stmt, varBase, elseCase.VarName)
 				if err != nil {
 					return nil, err
 				}
@@ -332,9 +416,8 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 			}
 		case *ast.IfStmt:
 			// Nested if-else chain - recurse
-			// For now, treat as else branch
 			for _, stmt := range e.Body.List {
-				stmtStr, err := t.analyzeStatement(stmt)
+				stmtStr, err := t.analyzeStatementWithVarBinding(stmt, varBase, elseCase.VarName)
 				if err != nil {
 					return nil, err
 				}
@@ -344,17 +427,54 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 			}
 		}
 		match.Cases = append(match.Cases, elseCase)
+	} else if pattern == "Some" {
+		// For Option types without else, add implicit None case
+		match.Cases = append(match.Cases, MatchCase{
+			Pattern:   "None",
+			BodyStmts: []string{"()"},
+		})
 	}
 
 	return match, nil
 }
 
-// extractSumTypeCondition extracts scrutinee and pattern from a condition
-func (t *Transpiler) extractSumTypeCondition(cond ast.Expr) (scrutinee, pattern string) {
+// analyzeStatementWithVarBinding analyzes a statement replacing witness field accesses
+// with the appropriate bound variable or destructured field name.
+func (t *Transpiler) analyzeStatementWithVarBinding(stmt ast.Stmt, varBase string, boundVar string) (string, error) {
+	stmtStr, err := t.analyzeStatement(stmt)
+	if err != nil {
+		return "", err
+	}
+
+	if varBase != "" && boundVar != "" {
+		upperBase := strings.ToUpper(t.toSnakeCase(varBase))
+		prefix := fmt.Sprintf("witness::%s.", upperBase)
+
+		if boundVar == "data" {
+			// Either-Left arm: multi-field → replace witness::W.field_name with field_name
+			// single-field → replace witness::W.field with "data"
+			fieldInfo := t.getEitherFieldInfo(varBase)
+			if fieldInfo != nil && len(fieldInfo.LeftFieldNames) > 1 {
+				stmtStr = t.replaceWitnessFieldAccess(stmtStr, prefix, "")
+			} else {
+				stmtStr = t.replaceWitnessFieldAccess(stmtStr, prefix, "data")
+			}
+		} else {
+			// Option-Some or Either-Right: replace witness::W.any_field with bound var
+			stmtStr = t.replaceWitnessFieldAccess(stmtStr, prefix, boundVar)
+		}
+	}
+
+	return stmtStr, nil
+}
+
+// extractSumTypeCondition extracts scrutinee, pattern, and variable base name from a condition
+func (t *Transpiler) extractSumTypeCondition(cond ast.Expr) (scrutinee, pattern, varBase string) {
 	switch c := cond.(type) {
 	case *ast.SelectorExpr:
 		// w.IsLeft or opt.IsSome
 		if ident, ok := c.X.(*ast.Ident); ok {
+			varBase = ident.Name
 			scrutinee = t.resolveWitnessRef(ident.Name)
 			switch c.Sel.Name {
 			case "IsLeft":
@@ -372,6 +492,7 @@ func (t *Transpiler) extractSumTypeCondition(cond ast.Expr) (scrutinee, pattern 
 		if c.Op == token.NOT {
 			if sel, ok := c.X.(*ast.SelectorExpr); ok {
 				if ident, ok := sel.X.(*ast.Ident); ok {
+					varBase = ident.Name
 					scrutinee = t.resolveWitnessRef(ident.Name)
 					switch sel.Sel.Name {
 					case "IsLeft":
@@ -396,6 +517,47 @@ func (t *Transpiler) resolveWitnessRef(name string) string {
 		}
 	}
 	return t.toSnakeCase(name)
+}
+
+// getEitherFieldInfo looks up the EitherFieldInfo for a witness variable by its Go name.
+func (t *Transpiler) getEitherFieldInfo(varBase string) *EitherFieldInfo {
+	upperName := strings.ToUpper(t.toSnakeCase(varBase))
+	for _, w := range t.witnessValues {
+		if strings.ToUpper(w.Name) == upperName && w.GoTypeName != "" {
+			if info, ok := t.eitherFields[w.GoTypeName]; ok {
+				return info
+			}
+		}
+	}
+	return nil
+}
+
+// replaceWitnessFieldAccess replaces all `prefix + field_name` occurrences in s.
+// If replacement is non-empty, every occurrence is replaced with replacement.
+// If replacement is empty, every occurrence is replaced with the field_name itself.
+func (t *Transpiler) replaceWitnessFieldAccess(s, prefix, replacement string) string {
+	for {
+		idx := strings.Index(s, prefix)
+		if idx == -1 {
+			break
+		}
+		end := idx + len(prefix)
+		for end < len(s) {
+			c := s[end]
+			if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+				end++
+			} else {
+				break
+			}
+		}
+		fieldName := s[idx+len(prefix) : end]
+		rep := replacement
+		if rep == "" {
+			rep = fieldName
+		}
+		s = s[:idx] + rep + s[end:]
+	}
+	return s
 }
 
 // getOppositePattern returns the opposite pattern for sum types
@@ -589,6 +751,132 @@ func (t *Transpiler) analyzeConstants(genDecl *ast.GenDecl) error {
 	return nil
 }
 
+// analyzeTypeDeclarations processes type declarations to detect Option/Either patterns
+func (t *Transpiler) analyzeTypeDeclarations(genDecl *ast.GenDecl) error {
+	for _, spec := range genDecl.Specs {
+		if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+			typeName := typeSpec.Name.Name
+
+			// Check if this is a struct type
+			if structType, ok := typeSpec.Type.(*ast.StructType); ok {
+				// Check if this struct follows the Option pattern
+				// Pattern: { IsSome bool; Value T }
+				if optionType := t.detectOptionPattern(structType); optionType != "" {
+					t.customTypes[typeName] = fmt.Sprintf("Option<%s>", optionType)
+					continue
+				}
+
+				// Check if this struct follows the Either pattern
+				// Convention: IsLeft bool + (N left fields) + 1 right field
+				if info := t.detectEitherPattern(structType); info != nil {
+					t.customTypes[typeName] = fmt.Sprintf("Either<%s, %s>", info.LeftType, info.RightType)
+					t.eitherFields[typeName] = info
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// detectOptionPattern checks if a struct has the pattern { IsSome bool; Value T }
+func (t *Transpiler) detectOptionPattern(structType *ast.StructType) string {
+	if structType.Fields == nil || len(structType.Fields.List) < 2 {
+		return ""
+	}
+
+	hasIsSome := false
+	var valueType string
+
+	for _, field := range structType.Fields.List {
+		for _, name := range field.Names {
+			if name.Name == "IsSome" {
+				// Check if it's bool
+				if ident, ok := field.Type.(*ast.Ident); ok && ident.Name == "bool" {
+					hasIsSome = true
+				}
+			}
+			if name.Name == "Value" {
+				// Get the value type
+				typ, err := t.typeMapper.MapGoType(field.Type)
+				if err == nil {
+					valueType = typ
+				}
+			}
+		}
+	}
+
+	if hasIsSome && valueType != "" {
+		return valueType
+	}
+	return ""
+}
+
+// detectEitherPattern checks if a struct has the pattern { IsLeft bool; ...fields... }
+// Convention: the last non-discriminator field is the Right branch; all others are Left.
+// Returns nil if the struct does not match the Either pattern.
+func (t *Transpiler) detectEitherPattern(structType *ast.StructType) *EitherFieldInfo {
+	if structType.Fields == nil || len(structType.Fields.List) < 2 {
+		return nil
+	}
+
+	type fieldEntry struct {
+		snakeName string
+		simType   string
+	}
+
+	hasIsLeft := false
+	var nonDiscrim []fieldEntry
+
+	for _, field := range structType.Fields.List {
+		for _, name := range field.Names {
+			if name.Name == "IsLeft" || name.Name == "IsRight" {
+				if ident, ok := field.Type.(*ast.Ident); ok && ident.Name == "bool" {
+					hasIsLeft = true
+				}
+				continue
+			}
+			typ, err := t.typeMapper.MapGoType(field.Type)
+			if err == nil {
+				nonDiscrim = append(nonDiscrim, fieldEntry{
+					snakeName: t.toSnakeCase(name.Name),
+					simType:   typ,
+				})
+			}
+		}
+	}
+
+	if !hasIsLeft || len(nonDiscrim) < 2 {
+		return nil
+	}
+
+	// Last field → Right; everything before → Left
+	rightField := nonDiscrim[len(nonDiscrim)-1]
+	leftFields := nonDiscrim[:len(nonDiscrim)-1]
+
+	var leftType string
+	var leftFieldNames []string
+	for _, f := range leftFields {
+		leftFieldNames = append(leftFieldNames, f.snakeName)
+	}
+	if len(leftFields) == 1 {
+		leftType = leftFields[0].simType
+	} else {
+		var types []string
+		for _, f := range leftFields {
+			types = append(types, f.simType)
+		}
+		leftType = fmt.Sprintf("(%s)", strings.Join(types, ", "))
+	}
+
+	return &EitherFieldInfo{
+		LeftFieldNames: leftFieldNames,
+		LeftType:       leftType,
+		RightFieldName: rightField.snakeName,
+		RightType:      rightField.simType,
+	}
+}
+
 func (t *Transpiler) evaluateExpression(expr ast.Expr) (string, error) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
@@ -646,10 +934,29 @@ func (t *Transpiler) evaluateExpression(expr ast.Expr) (string, error) {
 			}
 			return fmt.Sprintf("%s.%s", varName, fieldName), nil
 		}
+	case *ast.IndexExpr:
+		// Handle array indexing like arr[0] or arr[i]
+		return t.evaluateIndexExpr(e)
+	case *ast.CompositeLit:
+		// Handle array literals like [3]u256{a, b, c}
+		return t.evaluateCompositeLit(e)
 	}
 
 	// If we can't evaluate it, return a default
 	return "true", nil
+}
+
+// evaluateCompositeLit handles composite literals like array literals
+func (t *Transpiler) evaluateCompositeLit(lit *ast.CompositeLit) (string, error) {
+	var elements []string
+	for _, elt := range lit.Elts {
+		elemStr, err := t.evaluateExpression(elt)
+		if err != nil {
+			return "", err
+		}
+		elements = append(elements, elemStr)
+	}
+	return fmt.Sprintf("[%s]", strings.Join(elements, ", ")), nil
 }
 
 // evaluateHexLiteral processes hex literals and normalizes them
@@ -753,7 +1060,7 @@ func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, e
 	// Evaluate arguments
 	var argStrs []string
 	for _, arg := range args {
-		argStr, err := t.evaluateExpression(arg)
+		argStr, err := t.evaluateJetArg(arg)
 		if err != nil {
 			return "", fmt.Errorf("failed to evaluate jet argument: %w", err)
 		}
@@ -764,6 +1071,12 @@ func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, e
 	if len(argStrs) == 0 {
 		return fmt.Sprintf("jet::%s()", jetInfo.SimplicityName), nil
 	}
+
+	// BIP340Verify requires special tuple formatting: ((pubkey, msg), sig)
+	if jetName == "BIP340Verify" && len(argStrs) == 3 {
+		return fmt.Sprintf("jet::%s((%s, %s), %s)", jetInfo.SimplicityName, argStrs[0], argStrs[1], argStrs[2]), nil
+	}
+
 	return fmt.Sprintf("jet::%s(%s)", jetInfo.SimplicityName, strings.Join(argStrs, ", ")), nil
 }
 
@@ -838,10 +1151,35 @@ func (t *Transpiler) generateMainFunction() {
 
 	// If we have match expressions, generate them
 	if t.hasMatchExpr && len(t.matchExprs) > 0 {
-		for _, match := range t.matchExprs {
-			matchCode := t.generateMatchExpression(match, "    ")
-			t.writeLine(matchCode)
+		// First, generate any jet calls that need to happen before the matches
+		for _, jc := range t.jetCalls {
+			if jc.VarName != "" {
+				if jc.Args == "" {
+					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s();", jc.VarName, jc.ReturnType, jc.JetName))
+				} else {
+					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s(%s);", jc.VarName, jc.ReturnType, jc.JetName, jc.Args))
+				}
+			}
 		}
+
+		// Generate match expressions with counter accumulation for multisig
+		if len(t.matchExprs) > 1 {
+			// Multiple match expressions - use counter accumulation
+			t.generateMultisigMatchCode()
+		} else {
+			// Single match expression
+			for _, match := range t.matchExprs {
+				matchCode := t.generateMatchExpression(match, "    ")
+				t.writeLine(matchCode)
+			}
+		}
+		t.writeLine("}")
+		return
+	}
+
+	// If we have unrolled loops, generate them
+	if t.hasUnrolledLoop && len(t.unrolledLoops) > 0 {
+		t.generateUnrolledLoopCode()
 		t.writeLine("}")
 		return
 	}
@@ -918,6 +1256,56 @@ func (t *Transpiler) generateMainFunction() {
 	t.writeLine("}")
 }
 
+// generateMultisigMatchCode generates code for multiple Option match expressions with counter accumulation
+func (t *Transpiler) generateMultisigMatchCode() {
+	t.writeLine("")
+	t.writeLine("    // Signature verification with counter accumulation")
+
+	for i, match := range t.matchExprs {
+		// Generate counter assignment with match expression
+		if i == 0 {
+			t.writeLine(fmt.Sprintf("    let count_%d: u32 =", i))
+		} else {
+			t.writeLine(fmt.Sprintf("    let count_%d: u32 = count_%d +", i, i-1))
+		}
+
+		// Generate match expression inline
+		t.writeLine(fmt.Sprintf("        match %s {", match.Scrutinee))
+
+		for _, mc := range match.Cases {
+			pattern := mc.Pattern
+			if mc.VarName != "" {
+				pattern = fmt.Sprintf("%s(%s)", mc.Pattern, mc.VarName)
+			}
+
+			if mc.Pattern == "None" {
+				// None arm: no block braces, just the value
+				t.writeLine("            None => 0,")
+			} else if mc.Pattern == "Some" {
+				t.writeLine(fmt.Sprintf("            %s => {", pattern))
+				// Jet calls are statements; they need semicolons before the return value
+				for _, stmt := range mc.BodyStmts {
+					t.writeLine(fmt.Sprintf("                %s;", stmt))
+				}
+				t.writeLine("                1")
+				t.writeLine("            },")
+			} else {
+				t.writeLine(fmt.Sprintf("            %s => {", pattern))
+				for _, stmt := range mc.BodyStmts {
+					t.writeLine(fmt.Sprintf("                %s", stmt))
+				}
+				t.writeLine("            },")
+			}
+		}
+		t.writeLine("        };")
+	}
+
+	// Final verification - require at least 2 signatures
+	t.writeLine("")
+	t.writeLine(fmt.Sprintf("    // Require at least 2 valid signatures"))
+	t.writeLine(fmt.Sprintf("    jet::verify(jet::le_32(2, count_%d))", len(t.matchExprs)-1))
+}
+
 // formatBIP340Args formats arguments for BIP340Verify with proper tuple syntax
 func (jc *JetCall) formatBIP340Args() string {
 	// Split the args by comma
@@ -952,4 +1340,100 @@ func (t *Transpiler) toSnakeCase(name string) string {
 func (t *Transpiler) writeLine(line string) {
 	t.output.WriteString(line)
 	t.output.WriteString("\n")
+}
+
+// generateUnrolledLoopCode generates code for unrolled loops with counter accumulation
+func (t *Transpiler) generateUnrolledLoopCode() {
+	// First, generate any jet calls that happen before the loop
+	for _, jc := range t.jetCalls {
+		if jc.VarName != "" {
+			if jc.Args == "" {
+				t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s();", jc.VarName, jc.ReturnType, jc.JetName))
+			} else {
+				t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s(%s);", jc.VarName, jc.ReturnType, jc.JetName, jc.Args))
+			}
+		}
+	}
+
+	// Generate unrolled loop code
+	for _, loop := range t.unrolledLoops {
+		t.writeLine(fmt.Sprintf("    // Unrolled loop (originally: for %s := 0; %s < %d; %s++)",
+			loop.IndexVar, loop.IndexVar, loop.Iterations, loop.IndexVar))
+
+		// Generate counter accumulation
+		for i := 0; i < loop.Iterations; i++ {
+			// Generate a check_sig call and accumulate
+			if i == 0 {
+				t.writeLine(fmt.Sprintf("    let count_%d: u32 =", i))
+			} else {
+				t.writeLine(fmt.Sprintf("    let count_%d: u32 = count_%d +", i, i-1))
+			}
+
+			// Generate the body for this iteration
+			for _, stmt := range loop.BodyStmts[i] {
+				t.writeLine(fmt.Sprintf("        %s", stmt))
+			}
+		}
+
+		// Final verification
+		t.writeLine(fmt.Sprintf("    jet::verify(jet::le_32(2, count_%d))", loop.Iterations-1))
+	}
+}
+
+// generateWitnessPlaceholder returns a syntactically valid SimplicityHL zero-value
+// for the given Simplicity type. Used when the actual witness data is not known at
+// compile time (runtime witnesses).
+func generateWitnessPlaceholder(simType string) string {
+	simType = strings.TrimSpace(simType)
+
+	// Fixed-size byte arrays: [u8; N]
+	if strings.HasPrefix(simType, "[u8; ") && strings.HasSuffix(simType, "]") {
+		nStr := strings.TrimSpace(simType[5 : len(simType)-1])
+		if n, err := strconv.Atoi(nStr); err == nil {
+			return "0x" + strings.Repeat("00", n)
+		}
+	}
+
+	switch simType {
+	case "u256":
+		return "0x" + strings.Repeat("0", 64)
+	case "u128":
+		return "0x" + strings.Repeat("0", 32)
+	case "u64":
+		return "0x0000000000000000"
+	case "u32":
+		return "0x00000000"
+	case "u16":
+		return "0x0000"
+	case "u8":
+		return "0x00"
+	case "bool":
+		return "false"
+	}
+
+	// Option<T> → None
+	if strings.HasPrefix(simType, "Option<") && strings.HasSuffix(simType, ">") {
+		return "None"
+	}
+
+	// Either<L, R> → Left(zero_L)
+	if strings.HasPrefix(simType, "Either<") && strings.HasSuffix(simType, ">") {
+		if st, err := simplicity_types.ParseSumType(simType); err == nil {
+			return fmt.Sprintf("Left(%s)", generateWitnessPlaceholder(st.LeftType))
+		}
+	}
+
+	// Tuple (A, B, ...) → (zero_A, zero_B, ...)
+	if strings.HasPrefix(simType, "(") && strings.HasSuffix(simType, ")") {
+		if tt, err := simplicity_types.ParseTupleType(simType); err == nil && len(tt.Elements) > 0 {
+			var vals []string
+			for _, elem := range tt.Elements {
+				vals = append(vals, generateWitnessPlaceholder(strings.TrimSpace(elem)))
+			}
+			return "(" + strings.Join(vals, ", ") + ")"
+		}
+	}
+
+	// Fallback: u256-sized zero
+	return "0x" + strings.Repeat("0", 64)
 }

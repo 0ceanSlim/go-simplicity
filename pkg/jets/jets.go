@@ -43,23 +43,30 @@ func (r *JetRegistry) registerBuiltinJets() {
 	// SHA-256 operations
 	r.jets["SHA256Init"] = JetInfo{
 		GoName:         "SHA256Init",
-		SimplicityName: "sha_256_iv",
+		SimplicityName: "sha_256_ctx_8_init",
 		ParamTypes:     []string{},
 		ReturnType:     "Ctx8",
 	}
 
 	r.jets["SHA256Add32"] = JetInfo{
 		GoName:         "SHA256Add32",
-		SimplicityName: "sha_256_block",
+		SimplicityName: "sha_256_ctx_8_add_32",
 		ParamTypes:     []string{"Ctx8", "[u8; 32]"},
 		ReturnType:     "Ctx8",
 	}
 
 	r.jets["SHA256Finalize"] = JetInfo{
 		GoName:         "SHA256Finalize",
-		SimplicityName: "sha_256_finalize",
+		SimplicityName: "sha_256_ctx_8_finalize",
 		ParamTypes:     []string{"Ctx8"},
 		ReturnType:     "u256",
+	}
+
+	r.jets["CheckLockHeight"] = JetInfo{
+		GoName:         "CheckLockHeight",
+		SimplicityName: "check_lock_height",
+		ParamTypes:     []string{"u32"},
+		ReturnType:     "()",
 	}
 
 	// Comparison operations

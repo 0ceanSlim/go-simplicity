@@ -8,9 +8,9 @@ import (
 
 // SumType represents Either<L, R> or Option<T> types
 type SumType struct {
-	Kind       SumTypeKind
-	LeftType   string // For Either: left type, For Option: the inner type
-	RightType  string // For Either: right type, For Option: unused
+	Kind      SumTypeKind
+	LeftType  string // For Either: left type, For Option: the inner type
+	RightType string // For Either: right type, For Option: unused
 }
 
 type SumTypeKind int
@@ -99,10 +99,10 @@ func IsSumType(typeStr string) bool {
 
 // MatchArm represents a single arm of a match expression
 type MatchArm struct {
-	Pattern  string // "Left(data)" or "Right(sig)" or "Some(val)" or "None"
-	VarName  string // The bound variable name (data, sig, val, etc.)
-	VarType  string // The type of the bound variable
-	Body     string // The body of the match arm
+	Pattern string // "Left(data)" or "Right(sig)" or "Some(val)" or "None"
+	VarName string // The bound variable name (data, sig, val, etc.)
+	VarType string // The type of the bound variable
+	Body    string // The body of the match arm
 }
 
 // MatchExpr represents a complete match expression

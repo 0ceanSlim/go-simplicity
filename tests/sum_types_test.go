@@ -100,8 +100,8 @@ func TestTupleTypeParsing(t *testing.T) {
 
 func TestSumTypeDetection(t *testing.T) {
 	testCases := []struct {
-		input  string
-		isSum  bool
+		input string
+		isSum bool
 	}{
 		{"Either<u256, [u8; 64]>", true},
 		{"Option<u256>", true},
