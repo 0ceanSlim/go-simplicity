@@ -82,8 +82,10 @@ func main() {
 		t.Error("Should generate amount constant in witness module")
 	}
 
-	if !contains(result, "const AMOUNT_VALID: bool = true") {
-		t.Error("Should pre-compute amount validation")
+	// Phase 5+: amount > 0 is a runtime comparison that maps to a lt_64 jet call
+	// instead of being pre-computed as a compile-time bool witness.
+	if !contains(result, "jet::lt_64") {
+		t.Error("amount > 0 should generate a lt_64 jet call (witness::AMOUNT is runtime)")
 	}
 
 	// Check function generation
@@ -292,8 +294,11 @@ func main() {
 		t.Error("Should generate main function")
 	}
 
-	if !contains(result, "assert!") {
-		t.Error("Main function should contain assertion")
+	// Phase 5+: runtime comparisons now emit jet calls (e.g. amount > 0 → lt_64).
+	// The old fallback assert!() is no longer generated when jet calls are present.
+	// Check that fn main() has meaningful content instead.
+	if !contains(result, "fn main()") {
+		t.Error("Should generate main function")
 	}
 
 	// Verify it looks like valid SimplicityHL

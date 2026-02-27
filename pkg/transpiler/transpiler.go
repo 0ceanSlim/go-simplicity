@@ -210,6 +210,10 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 			// Handle := assignments
 			if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
 				if ident, ok := s.Lhs[0].(*ast.Ident); ok {
+					// Skip blank identifier assignments: _ = someVar
+					if ident.Name == "_" {
+						continue
+					}
 					// Check if RHS is a jet call
 					if callExpr, ok := s.Rhs[0].(*ast.CallExpr); ok {
 						if sel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
@@ -240,6 +244,16 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 								})
 								continue
 							}
+						}
+					}
+
+					// Handle binary expression assignments: result := a + b, result := a < b, etc.
+					// Check before the evaluateExpression fallback so runtime operations
+					// map to jet calls rather than always resolving to "true".
+					if binExpr, ok := s.Rhs[0].(*ast.BinaryExpr); ok {
+						if jc, matched := t.binaryExprToJetCall(ident.Name, binExpr); matched {
+							t.jetCalls = append(t.jetCalls, *jc)
+							continue
 						}
 					}
 
@@ -983,6 +997,202 @@ func (t *Transpiler) evaluateHexLiteral(value string) (string, error) {
 	return "0x" + strings.ToLower(hexPart), nil
 }
 
+// ─── Phase 5: operator-to-jet mapping ────────────────────────────────────────
+
+// binaryExprToJetCall converts a Go binary expression into a JetCall when at
+// least one operand is a runtime value (witness:: or param:: reference, or a
+// local variable from a previous jet call).
+//
+// Returns (jc, true) on success; (nil, false) when both sides are compile-time
+// constants and the expression should be folded by evaluateBinaryExpr instead.
+func (t *Transpiler) binaryExprToJetCall(varName string, expr *ast.BinaryExpr) (*JetCall, bool) {
+	leftStr, _ := t.evaluateJetArg(expr.X)
+	rightStr, _ := t.evaluateJetArg(expr.Y)
+
+	leftRuntime := t.isRuntimeRef(leftStr)
+	rightRuntime := t.isRuntimeRef(rightStr)
+
+	if !leftRuntime && !rightRuntime {
+		return nil, false
+	}
+
+	width := t.inferOperandTypeWidth(expr.X, expr.Y)
+	jetName, swapArgs := t.operatorToJetName(expr.Op, width)
+	if jetName == "" {
+		return nil, false
+	}
+
+	var args string
+	if swapArgs {
+		args = rightStr + ", " + leftStr
+	} else {
+		args = leftStr + ", " + rightStr
+	}
+
+	return &JetCall{
+		VarName:    t.toSnakeCase(varName),
+		JetName:    jetName,
+		Args:       args,
+		ReturnType: t.operatorReturnType(expr.Op, width),
+	}, true
+}
+
+// isRuntimeRef returns true if s is a witness::, param::, or local jet variable
+// reference (i.e., not a compile-time numeric or hex literal).
+func (t *Transpiler) isRuntimeRef(s string) bool {
+	if strings.HasPrefix(s, "witness::") || strings.HasPrefix(s, "param::") {
+		return true
+	}
+	// Also treat local variables from previous jet calls as runtime
+	for _, jc := range t.jetCalls {
+		if jc.VarName == s {
+			return true
+		}
+	}
+	return false
+}
+
+// inferOperandTypeWidth picks u8/u16/u32/u64 from the types of two operands.
+// Defaults to u32 (the most common width for heights, sequences, indices).
+func (t *Transpiler) inferOperandTypeWidth(left, right ast.Expr) string {
+	lt := t.inferExprType(left)
+	rt := t.inferExprType(right)
+	if lt == "u64" || rt == "u64" {
+		return "u64"
+	}
+	if lt == "u16" && rt == "u16" {
+		return "u16"
+	}
+	if lt == "u8" && rt == "u8" {
+		return "u8"
+	}
+	return "u32"
+}
+
+// inferExprType returns the Simplicity type of a Go expression by consulting
+// the transpiler's known constants, witnesses, and jet call results.
+func (t *Transpiler) inferExprType(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		name := strings.ToUpper(t.toSnakeCase(e.Name))
+		for _, c := range t.constants {
+			if strings.ToUpper(c.Name) == name {
+				return c.Type
+			}
+		}
+		for _, w := range t.witnessValues {
+			if strings.ToUpper(w.Name) == name {
+				return w.Type
+			}
+		}
+		for _, jc := range t.jetCalls {
+			if jc.VarName == t.toSnakeCase(e.Name) {
+				return jc.ReturnType
+			}
+		}
+	case *ast.BasicLit:
+		if e.Kind == token.INT {
+			if v, err := strconv.ParseInt(e.Value, 0, 64); err == nil && v > 0x7FFFFFFF {
+				return "u64"
+			}
+		}
+	}
+	return "u32"
+}
+
+// operatorToJetName maps a Go binary operator and Simplicity integer width to
+// a jet name.  swapArgs=true means the caller should pass (right, left) instead
+// of (left, right) — used for > and >= which are expressed as < and <= with
+// swapped operands.
+func (t *Transpiler) operatorToJetName(op token.Token, width string) (name string, swapArgs bool) {
+	suffix := "32"
+	switch width {
+	case "u8":
+		suffix = "8"
+	case "u16":
+		suffix = "16"
+	case "u64":
+		suffix = "64"
+	}
+	switch op {
+	case token.ADD:
+		return "add_" + suffix, false
+	case token.SUB:
+		return "subtract_" + suffix, false
+	case token.MUL:
+		return "multiply_" + suffix, false
+	case token.QUO:
+		return "divide_" + suffix, false
+	case token.REM:
+		return "modulo_" + suffix, false
+	case token.LSS:
+		return "lt_" + suffix, false // a < b
+	case token.LEQ:
+		return "le_" + suffix, false // a <= b
+	case token.GTR:
+		return "lt_" + suffix, true // a > b → lt(b, a)
+	case token.GEQ:
+		return "le_" + suffix, true // a >= b → le(b, a)
+	case token.EQL:
+		return "eq_" + suffix, false
+	case token.AND:
+		return "and_" + suffix, false
+	case token.OR:
+		return "or_" + suffix, false
+	case token.XOR:
+		return "xor_" + suffix, false
+	}
+	return "", false
+}
+
+// operatorReturnType returns the Simplicity return type for the jet that
+// corresponds to a given Go binary operator and integer width.
+func (t *Transpiler) operatorReturnType(op token.Token, width string) string {
+	switch op {
+	case token.ADD, token.SUB:
+		// add_N / subtract_N return a (carry/borrow, result) pair
+		return "(bool, " + width + ")"
+	case token.MUL:
+		// multiply_N returns a double-width integer
+		switch width {
+		case "u8":
+			return "u16"
+		case "u16":
+			return "u32"
+		case "u64":
+			return "u128"
+		default:
+			return "u64" // multiply_32 → u64
+		}
+	case token.LSS, token.LEQ, token.GTR, token.GEQ, token.EQL:
+		return "bool"
+	default:
+		// divide, modulo, and, or, xor return same width as input
+		return width
+	}
+}
+
+// writeLetBinding emits a `let` statement for a JetCall that has a variable
+// name.  For arithmetic jets that return a carry/borrow bit as (bool, uN), the
+// carry is discarded with the `(_, varName)` destructuring pattern.
+func (t *Transpiler) writeLetBinding(indent string, jc JetCall) {
+	var stmt string
+	callExpr := fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args)
+	if jc.Args == "" {
+		callExpr = fmt.Sprintf("jet::%s()", jc.JetName)
+	}
+
+	if strings.HasPrefix(jc.ReturnType, "(bool,") {
+		// Discard the carry/borrow flag — the caller only wants the numeric result.
+		stmt = fmt.Sprintf("%slet (_, %s): %s = %s;", indent, jc.VarName, jc.ReturnType, callExpr)
+	} else {
+		stmt = fmt.Sprintf("%slet %s: %s = %s;", indent, jc.VarName, jc.ReturnType, callExpr)
+	}
+	t.writeLine(stmt)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 func (t *Transpiler) evaluateBinaryExpr(expr *ast.BinaryExpr) (string, error) {
 	// Try to evaluate both sides
 	left, leftErr := t.evaluateExpression(expr.X)
@@ -1154,11 +1364,7 @@ func (t *Transpiler) generateMainFunction() {
 		// First, generate any jet calls that need to happen before the matches
 		for _, jc := range t.jetCalls {
 			if jc.VarName != "" {
-				if jc.Args == "" {
-					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s();", jc.VarName, jc.ReturnType, jc.JetName))
-				} else {
-					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s(%s);", jc.VarName, jc.ReturnType, jc.JetName, jc.Args))
-				}
+				t.writeLetBinding("    ", jc)
 			}
 		}
 
@@ -1188,12 +1394,7 @@ func (t *Transpiler) generateMainFunction() {
 	if len(t.jetCalls) > 0 {
 		for _, jc := range t.jetCalls {
 			if jc.VarName != "" {
-				// This is an assignment: let varName: type = jet::name(args)
-				if jc.Args == "" {
-					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s();", jc.VarName, jc.ReturnType, jc.JetName))
-				} else {
-					t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s(%s);", jc.VarName, jc.ReturnType, jc.JetName, jc.Args))
-				}
+				t.writeLetBinding("    ", jc)
 			} else {
 				// This is a standalone call (like BIP340Verify)
 				if jc.Args == "" {
@@ -1347,11 +1548,7 @@ func (t *Transpiler) generateUnrolledLoopCode() {
 	// First, generate any jet calls that happen before the loop
 	for _, jc := range t.jetCalls {
 		if jc.VarName != "" {
-			if jc.Args == "" {
-				t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s();", jc.VarName, jc.ReturnType, jc.JetName))
-			} else {
-				t.writeLine(fmt.Sprintf("    let %s: %s = jet::%s(%s);", jc.VarName, jc.ReturnType, jc.JetName, jc.Args))
-			}
+			t.writeLetBinding("    ", jc)
 		}
 	}
 

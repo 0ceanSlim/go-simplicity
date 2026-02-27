@@ -126,6 +126,99 @@ func TestExampleHTLC(t *testing.T) {
 	}
 }
 
+// TestExampleP2PKTestable verifies the testable P2PK example compiles with real BIP-340 test vectors.
+// The generated output should be immediately executable in the SimplicityHL playground
+// with no manual witness substitution required.
+func TestExampleP2PKTestable(t *testing.T) {
+	out := compileExample(t, "../examples/testable/p2pk_testable.go")
+
+	// Witness module must be empty — the sig is a param constant, not a runtime witness.
+	if strings.Contains(out, "const SIG:") {
+		t.Error("p2pk_testable: should not have a runtime SIG witness; sig is a param constant")
+	}
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"param module", "mod param {"},
+		// Real BIP-340 test vector #0 pubkey (NOT a fake zero pubkey)
+		{"real alice pubkey", "0xf9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"},
+		// Real test message (all zeros is actually the BIP-340 test vector message)
+		{"test message param", "TEST_MSG: u256"},
+		// Real BIP-340 test vector #0 signature (starts with e907831f...)
+		{"real alice sig", "0xe907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca8215"},
+		// Sig is in param (compile-time), not witness (runtime)
+		{"sig as param constant", "ALICE_TEST_SIG: [u8; 64]"},
+		{"main function", "fn main()"},
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+		// Sig referenced via param:: (not witness::)
+		{"sig from param module", "param::ALICE_TEST_SIG"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("p2pk_testable: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// Must NOT have zero-value placeholder signature
+	zeroSig := "0x" + strings.Repeat("00", 64)
+	if strings.Contains(out, "ALICE_TEST_SIG: [u8; 64] = "+zeroSig) {
+		t.Error("p2pk_testable: ALICE_TEST_SIG should be the real BIP-340 test vector, not all zeros")
+	}
+
+	// Must NOT use sig_all_hash (testable uses a fixed message constant instead)
+	if strings.Contains(out, "sig_all_hash") {
+		t.Error("p2pk_testable: should not use sig_all_hash; testable examples use fixed message constants")
+	}
+}
+
+// TestExampleHTLCTestable verifies the testable HTLC example compiles with real BIP-340 test vectors.
+func TestExampleHTLCTestable(t *testing.T) {
+	out := compileExample(t, "../examples/testable/htlc_testable.go")
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"param module", "mod param {"},
+		// Real BIP-340 test vector pubkeys
+		{"real alice pubkey", "0xf9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"},
+		{"real bob pubkey", "0xdff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"},
+		// Verified SHA-256 hash lock (SHA-256 of 32 zero bytes)
+		{"verified hashlock", "0x66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925"},
+		// Real BIP-340 test vector signatures in params
+		{"real alice test sig", "0xe907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca8215"},
+		{"real bob test sig", "0x6896bd60eeae296db48a229ff71dfe071bde413e6d43f917dc8dcf8c78de3341"},
+		// Either match structure
+		{"match expression", "match witness::W {"},
+		{"Left arm", "Left(data)"},
+		{"Right arm", "Right("},
+		// SHA-256 chain in Left arm
+		{"sha_256_ctx_8_init jet", "jet::sha_256_ctx_8_init()"},
+		{"sha_256_ctx_8_add_32 jet", "jet::sha_256_ctx_8_add_32("},
+		{"sha_256_ctx_8_finalize jet", "jet::sha_256_ctx_8_finalize("},
+		{"eq_256 jet", "jet::eq_256("},
+		// BIP-340 verify in both arms
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+		// Test sigs referenced via param::
+		{"alice sig via param", "param::ALICE_TEST_SIG"},
+		{"bob sig via param", "param::BOB_TEST_SIG"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("htlc_testable: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// Must NOT use sig_all_hash
+	if strings.Contains(out, "sig_all_hash") {
+		t.Error("htlc_testable: should not use sig_all_hash; testable examples use fixed message constants")
+	}
+}
+
 // TestExampleMultisig verifies the 2-of-3 multisig example compiles to correct SimplicityHL.
 func TestExampleMultisig(t *testing.T) {
 	out := compileExample(t, "../examples/multisig.go")

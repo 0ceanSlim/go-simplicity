@@ -126,6 +126,122 @@ func (r *JetRegistry) registerBuiltinJets() {
 		ParamTypes:     []string{},
 		ReturnType:     "u32",
 	}
+
+	// -------------------------------------------------------------------------
+	// Arithmetic jets
+	// add_N: (uN, uN) -> (bool, uN)  — bool is the carry flag
+	// subtract_N: (uN, uN) -> (bool, uN) — bool is the borrow flag
+	// multiply_N: (uN, uN) -> u(2N)  — result is double-width (no overflow)
+	// divide_N / modulo_N: (uN, uN) -> uN — quotient / remainder
+	// -------------------------------------------------------------------------
+
+	// 8-bit arithmetic
+	r.jets["Add8"] = JetInfo{GoName: "Add8", SimplicityName: "add_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "(bool, u8)"}
+	r.jets["Subtract8"] = JetInfo{GoName: "Subtract8", SimplicityName: "subtract_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "(bool, u8)"}
+	r.jets["Multiply8"] = JetInfo{GoName: "Multiply8", SimplicityName: "multiply_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "u16"}
+
+	// 16-bit arithmetic
+	r.jets["Add16"] = JetInfo{GoName: "Add16", SimplicityName: "add_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "(bool, u16)"}
+	r.jets["Subtract16"] = JetInfo{GoName: "Subtract16", SimplicityName: "subtract_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "(bool, u16)"}
+	r.jets["Multiply16"] = JetInfo{GoName: "Multiply16", SimplicityName: "multiply_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "u32"}
+
+	// 32-bit arithmetic
+	r.jets["Add32"] = JetInfo{GoName: "Add32", SimplicityName: "add_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "(bool, u32)"}
+	r.jets["Subtract32"] = JetInfo{GoName: "Subtract32", SimplicityName: "subtract_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "(bool, u32)"}
+	r.jets["Multiply32"] = JetInfo{GoName: "Multiply32", SimplicityName: "multiply_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "u64"}
+	r.jets["Divide32"] = JetInfo{GoName: "Divide32", SimplicityName: "divide_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "u32"}
+	r.jets["Modulo32"] = JetInfo{GoName: "Modulo32", SimplicityName: "modulo_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "u32"}
+
+	// 64-bit arithmetic
+	r.jets["Add64"] = JetInfo{GoName: "Add64", SimplicityName: "add_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "(bool, u64)"}
+	r.jets["Subtract64"] = JetInfo{GoName: "Subtract64", SimplicityName: "subtract_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "(bool, u64)"}
+	r.jets["Multiply64"] = JetInfo{GoName: "Multiply64", SimplicityName: "multiply_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "u128"}
+	r.jets["Divide64"] = JetInfo{GoName: "Divide64", SimplicityName: "divide_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "u64"}
+	r.jets["Modulo64"] = JetInfo{GoName: "Modulo64", SimplicityName: "modulo_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "u64"}
+
+	// -------------------------------------------------------------------------
+	// Comparison jets — strict and non-strict, various widths.
+	// All return bool. le_32 is already registered above; others added here.
+	// -------------------------------------------------------------------------
+
+	// Strict less-than (a < b)
+	r.jets["Lt8"] = JetInfo{GoName: "Lt8", SimplicityName: "lt_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "bool"}
+	r.jets["Lt16"] = JetInfo{GoName: "Lt16", SimplicityName: "lt_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "bool"}
+	r.jets["Lt32"] = JetInfo{GoName: "Lt32", SimplicityName: "lt_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "bool"}
+	r.jets["Lt64"] = JetInfo{GoName: "Lt64", SimplicityName: "lt_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "bool"}
+
+	// Less-than-or-equal (a <= b) — le_32 already registered; add others
+	r.jets["Le8"] = JetInfo{GoName: "Le8", SimplicityName: "le_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "bool"}
+	r.jets["Le16"] = JetInfo{GoName: "Le16", SimplicityName: "le_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "bool"}
+	r.jets["Le64"] = JetInfo{GoName: "Le64", SimplicityName: "le_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "bool"}
+
+	// Equality — eq_32 and eq_256 already registered; add other widths
+	r.jets["Eq8"] = JetInfo{GoName: "Eq8", SimplicityName: "eq_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "bool"}
+	r.jets["Eq16"] = JetInfo{GoName: "Eq16", SimplicityName: "eq_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "bool"}
+	r.jets["Eq64"] = JetInfo{GoName: "Eq64", SimplicityName: "eq_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "bool"}
+
+	// -------------------------------------------------------------------------
+	// Bitwise logic jets — 32-bit subset (most common in contracts)
+	// All return uN of the same width as input.
+	// -------------------------------------------------------------------------
+	r.jets["And8"] = JetInfo{GoName: "And8", SimplicityName: "and_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "u8"}
+	r.jets["And16"] = JetInfo{GoName: "And16", SimplicityName: "and_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "u16"}
+	r.jets["And32"] = JetInfo{GoName: "And32", SimplicityName: "and_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "u32"}
+	r.jets["And64"] = JetInfo{GoName: "And64", SimplicityName: "and_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "u64"}
+
+	r.jets["Or8"] = JetInfo{GoName: "Or8", SimplicityName: "or_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "u8"}
+	r.jets["Or16"] = JetInfo{GoName: "Or16", SimplicityName: "or_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "u16"}
+	r.jets["Or32"] = JetInfo{GoName: "Or32", SimplicityName: "or_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "u32"}
+	r.jets["Or64"] = JetInfo{GoName: "Or64", SimplicityName: "or_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "u64"}
+
+	r.jets["Xor8"] = JetInfo{GoName: "Xor8", SimplicityName: "xor_8", ParamTypes: []string{"u8", "u8"}, ReturnType: "u8"}
+	r.jets["Xor16"] = JetInfo{GoName: "Xor16", SimplicityName: "xor_16", ParamTypes: []string{"u16", "u16"}, ReturnType: "u16"}
+	r.jets["Xor32"] = JetInfo{GoName: "Xor32", SimplicityName: "xor_32", ParamTypes: []string{"u32", "u32"}, ReturnType: "u32"}
+	r.jets["Xor64"] = JetInfo{GoName: "Xor64", SimplicityName: "xor_64", ParamTypes: []string{"u64", "u64"}, ReturnType: "u64"}
+
+	r.jets["Complement8"] = JetInfo{GoName: "Complement8", SimplicityName: "complement_8", ParamTypes: []string{"u8"}, ReturnType: "u8"}
+	r.jets["Complement16"] = JetInfo{GoName: "Complement16", SimplicityName: "complement_16", ParamTypes: []string{"u16"}, ReturnType: "u16"}
+	r.jets["Complement32"] = JetInfo{GoName: "Complement32", SimplicityName: "complement_32", ParamTypes: []string{"u32"}, ReturnType: "u32"}
+	r.jets["Complement64"] = JetInfo{GoName: "Complement64", SimplicityName: "complement_64", ParamTypes: []string{"u64"}, ReturnType: "u64"}
+
+	// -------------------------------------------------------------------------
+	// Time lock jets
+	// -------------------------------------------------------------------------
+	r.jets["CheckLockTime"] = JetInfo{GoName: "CheckLockTime", SimplicityName: "check_lock_time", ParamTypes: []string{"u32"}, ReturnType: "()"}
+	r.jets["TxIsFinal"] = JetInfo{GoName: "TxIsFinal", SimplicityName: "tx_is_final", ParamTypes: []string{}, ReturnType: "bool"}
+	r.jets["TxLockHeight"] = JetInfo{GoName: "TxLockHeight", SimplicityName: "tx_lock_height", ParamTypes: []string{}, ReturnType: "u32"}
+	r.jets["TxLockTime"] = JetInfo{GoName: "TxLockTime", SimplicityName: "tx_lock_time", ParamTypes: []string{}, ReturnType: "u32"}
+	r.jets["CheckLockDistance"] = JetInfo{GoName: "CheckLockDistance", SimplicityName: "check_lock_distance", ParamTypes: []string{"u16"}, ReturnType: "()"}
+	r.jets["CheckLockDuration"] = JetInfo{GoName: "CheckLockDuration", SimplicityName: "check_lock_duration", ParamTypes: []string{"u16"}, ReturnType: "()"}
+	r.jets["TxLockDistance"] = JetInfo{GoName: "TxLockDistance", SimplicityName: "tx_lock_distance", ParamTypes: []string{}, ReturnType: "u16"}
+	r.jets["TxLockDuration"] = JetInfo{GoName: "TxLockDuration", SimplicityName: "tx_lock_duration", ParamTypes: []string{}, ReturnType: "u16"}
+
+	// -------------------------------------------------------------------------
+	// Transaction introspection jets (Bitcoin subset)
+	// -------------------------------------------------------------------------
+	r.jets["NumInputs"] = JetInfo{GoName: "NumInputs", SimplicityName: "num_inputs", ParamTypes: []string{}, ReturnType: "u32"}
+	r.jets["NumOutputs"] = JetInfo{GoName: "NumOutputs", SimplicityName: "num_outputs", ParamTypes: []string{}, ReturnType: "u32"}
+	r.jets["InputPrevOutpoint"] = JetInfo{GoName: "InputPrevOutpoint", SimplicityName: "input_prev_outpoint", ParamTypes: []string{"u32"}, ReturnType: "(u256, u32)"}
+	r.jets["OutputScriptHash"] = JetInfo{GoName: "OutputScriptHash", SimplicityName: "output_script_hash", ParamTypes: []string{"u32"}, ReturnType: "u256"}
+	r.jets["InputScriptHash"] = JetInfo{GoName: "InputScriptHash", SimplicityName: "input_script_hash", ParamTypes: []string{"u32"}, ReturnType: "u256"}
+	r.jets["CurrentSequence"] = JetInfo{GoName: "CurrentSequence", SimplicityName: "current_sequence", ParamTypes: []string{}, ReturnType: "u32"}
+	r.jets["Version"] = JetInfo{GoName: "Version", SimplicityName: "version", ParamTypes: []string{}, ReturnType: "u32"}
+	r.jets["TransactionId"] = JetInfo{GoName: "TransactionId", SimplicityName: "transaction_id", ParamTypes: []string{}, ReturnType: "u256"}
+	r.jets["GenesisBlockHash"] = JetInfo{GoName: "GenesisBlockHash", SimplicityName: "genesis_block_hash", ParamTypes: []string{}, ReturnType: "u256"}
+	r.jets["InternalKey"] = JetInfo{GoName: "InternalKey", SimplicityName: "internal_key", ParamTypes: []string{}, ReturnType: "u256"}
+	r.jets["TapleafVersion"] = JetInfo{GoName: "TapleafVersion", SimplicityName: "tapleaf_version", ParamTypes: []string{}, ReturnType: "u8"}
+	r.jets["Tappath"] = JetInfo{GoName: "Tappath", SimplicityName: "tappath", ParamTypes: []string{}, ReturnType: "u256"}
+	r.jets["ScriptCmr"] = JetInfo{GoName: "ScriptCmr", SimplicityName: "script_cmr", ParamTypes: []string{}, ReturnType: "u256"}
+
+	// -------------------------------------------------------------------------
+	// SHA-256 variant jets (additional byte-width add operations)
+	// -------------------------------------------------------------------------
+	r.jets["SHA256Add1"] = JetInfo{GoName: "SHA256Add1", SimplicityName: "sha_256_ctx_8_add_1", ParamTypes: []string{"Ctx8", "u8"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add2"] = JetInfo{GoName: "SHA256Add2", SimplicityName: "sha_256_ctx_8_add_2", ParamTypes: []string{"Ctx8", "[u8; 2]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add4"] = JetInfo{GoName: "SHA256Add4", SimplicityName: "sha_256_ctx_8_add_4", ParamTypes: []string{"Ctx8", "[u8; 4]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add8"] = JetInfo{GoName: "SHA256Add8", SimplicityName: "sha_256_ctx_8_add_8", ParamTypes: []string{"Ctx8", "[u8; 8]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add16"] = JetInfo{GoName: "SHA256Add16", SimplicityName: "sha_256_ctx_8_add_16", ParamTypes: []string{"Ctx8", "[u8; 16]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add64"] = JetInfo{GoName: "SHA256Add64", SimplicityName: "sha_256_ctx_8_add_64", ParamTypes: []string{"Ctx8", "[u8; 64]"}, ReturnType: "Ctx8"}
 }
 
 // Lookup returns the jet info for a given Go function name
