@@ -1172,6 +1172,30 @@ func (t *Transpiler) inferExprType(expr ast.Expr) string {
 // a jet name.  swapArgs=true means the caller should pass (right, left) instead
 // of (left, right) — used for > and >= which are expressed as < and <= with
 // swapped operands.
+// opJetSpec pairs a jet name prefix with whether the arguments must be swapped.
+// Swapping handles the GT/GEQ cases: a > b compiles as lt(b, a).
+type opJetSpec struct {
+	prefix   string
+	swapArgs bool
+}
+
+// opJetMap maps each supported Go binary operator to its jet prefix and swap flag.
+var opJetMap = map[token.Token]opJetSpec{
+	token.ADD: {"add_", false},
+	token.SUB: {"subtract_", false},
+	token.MUL: {"multiply_", false},
+	token.QUO: {"divide_", false},
+	token.REM: {"modulo_", false},
+	token.LSS: {"lt_", false}, // a < b
+	token.LEQ: {"le_", false}, // a <= b
+	token.GTR: {"lt_", true},  // a > b → lt(b, a)
+	token.GEQ: {"le_", true},  // a >= b → le(b, a)
+	token.EQL: {"eq_", false},
+	token.AND: {"and_", false},
+	token.OR:  {"or_", false},
+	token.XOR: {"xor_", false},
+}
+
 func (t *Transpiler) operatorToJetName(op token.Token, width string) (name string, swapArgs bool) {
 	suffix := "32"
 	switch width {
@@ -1182,33 +1206,8 @@ func (t *Transpiler) operatorToJetName(op token.Token, width string) (name strin
 	case "u64":
 		suffix = "64"
 	}
-	switch op {
-	case token.ADD:
-		return "add_" + suffix, false
-	case token.SUB:
-		return "subtract_" + suffix, false
-	case token.MUL:
-		return "multiply_" + suffix, false
-	case token.QUO:
-		return "divide_" + suffix, false
-	case token.REM:
-		return "modulo_" + suffix, false
-	case token.LSS:
-		return "lt_" + suffix, false // a < b
-	case token.LEQ:
-		return "le_" + suffix, false // a <= b
-	case token.GTR:
-		return "lt_" + suffix, true // a > b → lt(b, a)
-	case token.GEQ:
-		return "le_" + suffix, true // a >= b → le(b, a)
-	case token.EQL:
-		return "eq_" + suffix, false
-	case token.AND:
-		return "and_" + suffix, false
-	case token.OR:
-		return "or_" + suffix, false
-	case token.XOR:
-		return "xor_" + suffix, false
+	if spec, ok := opJetMap[op]; ok {
+		return spec.prefix + suffix, spec.swapArgs
 	}
 	return "", false
 }
