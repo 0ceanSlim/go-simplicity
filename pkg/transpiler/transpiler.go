@@ -1,3 +1,4 @@
+// Package transpiler walks a parsed Go AST and emits SimplicityHL source code.
 package transpiler
 
 import (
@@ -9,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/0ceanslim/go-simplicity/pkg/jets"
-	simplicity_types "github.com/0ceanslim/go-simplicity/pkg/types"
+	simtypes "github.com/0ceanslim/go-simplicity/pkg/types"
 )
 
 // EitherFieldInfo tracks field names for Either struct types
@@ -20,27 +21,25 @@ type EitherFieldInfo struct {
 	RightType      string   // right branch type
 }
 
-// Transpiler converts Go AST to SimplicityHL
+// Transpiler converts Go AST to SimplicityHL.
 type Transpiler struct {
-	typeMapper       *simplicity_types.TypeMapper
+	typeMapper       *simtypes.TypeMapper
 	jetRegistry      *jets.JetRegistry
 	output           strings.Builder
 	witnessValues    []WitnessValue
 	constants        []Constant
 	functions        []Function
 	jetCalls         []JetCall                   // Track jet calls for code generation
-	mainBodyStmts    []string                    // Store main function body statements
 	matchExprs       []*MatchExpression          // Track match expressions
 	hasMatchExpr     bool                        // Flag to indicate main has match expression
 	unrolledLoops    []*UnrolledLoop             // Track unrolled for loops
 	hasUnrolledLoop  bool                        // Flag to indicate main has unrolled loops
-	arrayConstants   []*ArrayConstant            // Track array constants for param module
 	customTypes      map[string]string           // Map custom type names to Simplicity types
 	eitherFields     map[string]*EitherFieldInfo // Go struct name → field info for Either types
 	structFieldTypes map[string]string           // "StructName.FieldName" → Simplicity type (for SHA256Add auto-select)
 }
 
-// JetCall represents a jet function call in the code
+// JetCall represents a jet function call in the code.
 type JetCall struct {
 	VarName    string // Variable name being assigned (empty if inline)
 	JetName    string // Simplicity jet name
@@ -49,6 +48,7 @@ type JetCall struct {
 	IsWitness  bool   // True if argument should come from witness
 }
 
+// WitnessValue represents a witness variable declaration.
 type WitnessValue struct {
 	Name       string
 	Type       string
@@ -56,12 +56,14 @@ type WitnessValue struct {
 	GoTypeName string // Original Go struct type name, for Either field lookup
 }
 
+// Constant represents a Go const declaration mapped to a param module entry.
 type Constant struct {
 	Name  string
 	Type  string
 	Value string
 }
 
+// Function represents a user-defined helper function.
 type Function struct {
 	Name       string
 	Parameters []Parameter
@@ -69,6 +71,7 @@ type Function struct {
 	Body       string
 }
 
+// Parameter represents a function parameter.
 type Parameter struct {
 	Name string
 	Type string
@@ -77,25 +80,23 @@ type Parameter struct {
 // New creates a new transpiler instance
 func New() *Transpiler {
 	return &Transpiler{
-		typeMapper:   simplicity_types.NewTypeMapper(),
+		typeMapper:   simtypes.NewTypeMapper(),
 		jetRegistry:  jets.NewRegistry(),
 		eitherFields: make(map[string]*EitherFieldInfo),
 	}
 }
 
-// ToSimplicityHL transpiles Go AST to SimplicityHL code
-func (t *Transpiler) ToSimplicityHL(file *ast.File, fset *token.FileSet) (string, error) {
+// ToSimplicityHL transpiles Go AST to SimplicityHL code.
+func (t *Transpiler) ToSimplicityHL(file *ast.File) (string, error) {
 	t.output.Reset()
 	t.witnessValues = nil
 	t.constants = nil
 	t.functions = nil
 	t.jetCalls = nil
-	t.mainBodyStmts = nil
 	t.matchExprs = nil
 	t.hasMatchExpr = false
 	t.unrolledLoops = nil
 	t.hasUnrolledLoop = false
-	t.arrayConstants = nil
 	t.customTypes = make(map[string]string)
 	t.eitherFields = make(map[string]*EitherFieldInfo)
 	t.structFieldTypes = make(map[string]string)
@@ -1775,14 +1776,14 @@ func generateWitnessPlaceholder(simType string) string {
 
 	// Either<L, R> → Left(zero_L)
 	if strings.HasPrefix(simType, "Either<") && strings.HasSuffix(simType, ">") {
-		if st, err := simplicity_types.ParseSumType(simType); err == nil {
+		if st, err := simtypes.ParseSumType(simType); err == nil {
 			return fmt.Sprintf("Left(%s)", generateWitnessPlaceholder(st.LeftType))
 		}
 	}
 
 	// Tuple (A, B, ...) → (zero_A, zero_B, ...)
 	if strings.HasPrefix(simType, "(") && strings.HasSuffix(simType, ")") {
-		if tt, err := simplicity_types.ParseTupleType(simType); err == nil && len(tt.Elements) > 0 {
+		if tt, err := simtypes.ParseTupleType(simType); err == nil && len(tt.Elements) > 0 {
 			var vals []string
 			for _, elem := range tt.Elements {
 				vals = append(vals, generateWitnessPlaceholder(strings.TrimSpace(elem)))

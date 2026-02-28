@@ -1,3 +1,5 @@
+// Package jets provides the registry of Simplicity jet functions and their
+// Go-to-Simplicity name mappings.
 package jets
 
 // JetInfo describes a Simplicity jet function
@@ -257,21 +259,11 @@ func (r *JetRegistry) Lookup(goName string) (JetInfo, bool) {
 	return info, ok
 }
 
-// IsJet checks if a function name is a known jet
-func (r *JetRegistry) IsJet(goName string) bool {
-	_, ok := r.jets[goName]
-	return ok
-}
-
-// GetSimplicityName returns the Simplicity jet name for a Go function name
-func (r *JetRegistry) GetSimplicityName(goName string) string {
-	if info, ok := r.jets[goName]; ok {
-		return info.SimplicityName
-	}
-	return ""
-}
-
-// AllJets returns all registered jets
+// AllJets returns a copy of all registered jets.
 func (r *JetRegistry) AllJets() map[string]JetInfo {
-	return r.jets
+	copy := make(map[string]JetInfo, len(r.jets))
+	for k, v := range r.jets {
+		copy[k] = v
+	}
+	return copy
 }

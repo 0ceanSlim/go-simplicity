@@ -11,21 +11,78 @@ import (
 func TestArrayTypeParsing(t *testing.T) {
 	tm := types.NewTypeMapper()
 
-	testCases := []struct {
-		name     string
-		goType   string
-		expected string
+	// GetBitSize handles SimplicityHL type strings directly — test array types.
+	bitSizeCases := []struct {
+		simplicityType string
+		expectedBits   int
 	}{
-		{"simple array", "[3]u256", "[u256; 3]"},
-		{"byte array", "[64]byte", "[u8; 64]"},
-		{"nested option", "[3]Option[[64]byte]", "[Option<[u8; 64]>; 3]"},
+		{"[u8; 32]", 256}, // 32 bytes × 8 bits
+		{"[u8; 64]", 512}, // 64 bytes × 8 bits
+		{"[u8; 1]", 8},    // 1 byte
+		{"[u8; 16]", 128}, // 16 bytes × 8 bits
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Note: Direct string conversion isn't supported, but we test via compilation
-			_ = tm
-			_ = tc
+	for _, tc := range bitSizeCases {
+		t.Run("bitsize_"+tc.simplicityType, func(t *testing.T) {
+			got := tm.GetBitSize(tc.simplicityType)
+			if got != tc.expectedBits {
+				t.Errorf("GetBitSize(%q) = %d, want %d", tc.simplicityType, got, tc.expectedBits)
+			}
+		})
+	}
+
+	// Verify array types appear correctly in compiled SimplicityHL output.
+	compileCases := []struct {
+		name string
+		decl string // Go variable declaration
+		want string // expected SimplicityHL type string in output
+	}{
+		{"[32]byte witness", "var preimage [32]byte", "[u8; 32]"},
+		{"[64]byte witness", "var sig [64]byte", "[u8; 64]"},
+	}
+
+	for _, tc := range compileCases {
+		t.Run("compile_"+tc.name, func(t *testing.T) {
+			src := `package main
+import "simplicity/jet"
+func main() {
+	` + tc.decl + `
+	_ = preimage
+	msg := jet.SigAllHash()
+	jet.BIP340Verify(0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0, msg, sig)
+}
+`
+			// For the sig-only case, adjust source
+			if tc.decl == "var sig [64]byte" {
+				src = `package main
+import "simplicity/jet"
+func main() {
+	var sig [64]byte
+	msg := jet.SigAllHash()
+	jet.BIP340Verify(0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0, msg, sig)
+}
+`
+			} else {
+				src = `package main
+import "simplicity/jet"
+func main() {
+	var preimage [32]byte
+	var sig [64]byte
+	msg := jet.SigAllHash()
+	jet.BIP340Verify(0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0, msg, sig)
+	_ = preimage
+}
+`
+			}
+
+			c := compiler.New(compiler.Config{Target: "simplicityhl"})
+			out, err := c.Compile(src, "test.go")
+			if err != nil {
+				t.Fatalf("compile failed: %v", err)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("expected %q in output:\n%s", tc.want, out)
+			}
 		})
 	}
 }

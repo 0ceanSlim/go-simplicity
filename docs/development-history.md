@@ -1,7 +1,8 @@
-# go-simplicity Release Roadmap
+# Development History
 
-> Current state: Phase 9 complete — Four advanced example contracts (vault, oracle price, relative timelock, Taproot key spend), 5 new tests, README and ROADMAP updated.
-> Goal: Fully functional transpiler covering all mainstream Bitcoin/Elements contract patterns.
+A phase-by-phase record of how go-simplicity was built. Phases 5–9 are complete. See [CHANGELOG.md](../CHANGELOG.md) for the version release summary.
+
+> Final state: All nine phases complete — 91 jets, 60 tests, 16 examples, full documentation.
 
 ---
 

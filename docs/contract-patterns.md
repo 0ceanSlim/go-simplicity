@@ -412,7 +412,7 @@ type OptionalSig struct {
 
 ## Testable Examples
 
-`examples/testable/` contains variants that embed real BIP-340 spec test vectors from `pkg/testkeys`. The output is immediately paste-able into the [SimplicityHL playground](https://www.wpsoftware.net/elements-playground/) with no manual substitution needed.
+`examples/testable/` contains variants that embed real BIP-340 spec test vectors from `pkg/testkeys`. The output is immediately paste-able into the [SimplicityHL playground](https://ide.simplicity-lang.org/) with no manual substitution needed.
 
 ```bash
 ./build/simgo -input examples/testable/p2pk_testable.go

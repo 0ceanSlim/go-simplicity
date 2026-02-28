@@ -90,9 +90,3 @@ const (
 	// Verified: Go sha256.Sum256(make([]byte, 32)) == 66687AAD...
 	SHA256OfAllZero = "66687AADF862BD776C8FC18B8E9F8E20089714856EE233B3902A591D0D5F2925"
 )
-
-// WithHexPrefix returns a test vector constant with a 0x prefix, ready for
-// use as a Go hex literal or in generated SimplicityHL output.
-func WithHexPrefix(hex string) string {
-	return "0x" + hex
-}

@@ -295,10 +295,3 @@ func (t *Transpiler) analyzeIncDecStmtWithIndex(stmt *ast.IncDecStmt, _ string, 
 	}
 	return "", nil
 }
-
-// ArrayConstant represents a compile-time constant array
-type ArrayConstant struct {
-	Name     string
-	Type     string
-	Elements []string
-}

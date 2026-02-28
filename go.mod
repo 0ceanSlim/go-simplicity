@@ -1,3 +1,3 @@
 module github.com/0ceanslim/go-simplicity
 
-go 1.21
+go 1.23

@@ -1,3 +1,5 @@
+// Package types provides Go-to-Simplicity type mapping, sum type parsing
+// (Either/Option), and tuple type utilities.
 package types
 
 import (
@@ -216,12 +218,6 @@ func (tm *TypeMapper) evaluateArrayLength(expr ast.Expr) (int, error) {
 	}
 
 	return 0, fmt.Errorf("unsupported array length expression: %T", expr)
-}
-
-// IsSupported checks if a Go type is supported in Simplicity
-func (tm *TypeMapper) IsSupported(goType ast.Expr) bool {
-	_, err := tm.MapGoType(goType)
-	return err == nil
 }
 
 // GetBitSize returns the bit size for a Simplicity type

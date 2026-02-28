@@ -2,7 +2,6 @@ package types
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -13,10 +12,13 @@ type SumType struct {
 	RightType string // For Either: right type, For Option: unused
 }
 
+// SumTypeKind identifies whether a SumType is Either or Option.
 type SumTypeKind int
 
 const (
+	// SumTypeEither represents an Either<L, R> type.
 	SumTypeEither SumTypeKind = iota
+	// SumTypeOption represents an Option<T> type.
 	SumTypeOption
 )
 
@@ -202,38 +204,4 @@ func (tt *TupleType) ToSimplicityHL() string {
 		return fmt.Sprintf("(%s,)", tt.Elements[0])
 	}
 	return fmt.Sprintf("(%s)", strings.Join(tt.Elements, ", "))
-}
-
-// IsTupleType checks if a type string represents a tuple type
-func IsTupleType(typeStr string) bool {
-	typeStr = strings.TrimSpace(typeStr)
-	if !strings.HasPrefix(typeStr, "(") || !strings.HasSuffix(typeStr, ")") {
-		return false
-	}
-	// Make sure it's not an empty unit type being misidentified
-	inner := strings.TrimSpace(typeStr[1 : len(typeStr)-1])
-	return inner != "" || typeStr == "()"
-}
-
-// GoEitherPattern matches Go struct patterns for Either types
-// e.g., "struct { IsLeft bool; Left T; Right U }"
-var GoEitherPattern = regexp.MustCompile(`Either\[([^,\]]+),\s*([^\]]+)\]`)
-
-// GoOptionPattern matches Go struct patterns for Option types
-// e.g., "Option[T]"
-var GoOptionPattern = regexp.MustCompile(`Option\[([^\]]+)\]`)
-
-// MapGoSumType converts Go-style sum type to Simplicity style
-func MapGoSumType(goType string) (string, bool) {
-	// Check for Either[L, R]
-	if matches := GoEitherPattern.FindStringSubmatch(goType); matches != nil {
-		return fmt.Sprintf("Either<%s, %s>", matches[1], matches[2]), true
-	}
-
-	// Check for Option[T]
-	if matches := GoOptionPattern.FindStringSubmatch(goType); matches != nil {
-		return fmt.Sprintf("Option<%s>", matches[1]), true
-	}
-
-	return "", false
 }

@@ -1,5 +1,14 @@
 # go-simplicity
 
+[![CI](https://github.com/0ceanslim/go-simplicity/actions/workflows/ci.yml/badge.svg)](https://github.com/0ceanslim/go-simplicity/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/0ceanslim/go-simplicity)](https://goreportcard.com/report/github.com/0ceanslim/go-simplicity)
+[![Go Reference](https://pkg.go.dev/badge/github.com/0ceanslim/go-simplicity.svg)](https://pkg.go.dev/github.com/0ceanslim/go-simplicity)
+[![GitHub release](https://img.shields.io/github/v/release/0ceanslim/go-simplicity)](https://github.com/0ceanslim/go-simplicity/releases)
+[![Downloads](https://img.shields.io/github/downloads/0ceanslim/go-simplicity/total)](https://github.com/0ceanslim/go-simplicity/releases)
+[![Stars](https://img.shields.io/github/stars/0ceanslim/go-simplicity)](https://github.com/0ceanslim/go-simplicity/stargazers)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/0ceanslim/go-simplicity)](https://pkg.go.dev/github.com/0ceanslim/go-simplicity)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/0ceanslim/go-simplicity)
+
 A Go-to-SimplicityHL transpiler for writing Bitcoin/Elements smart contracts in Go.
 
 Write contract logic in idiomatic Go. The transpiler converts it to [SimplicityHL](https://github.com/BlockstreamResearch/SimplicityHL) — a typed, functional intermediate language that compiles to Simplicity bytecode for Bitcoin and Elements sidechains.
@@ -70,6 +79,8 @@ See [docs/contract-patterns.md](docs/contract-patterns.md) for Go source and gen
 | **Tx introspection** | `num_inputs/outputs`, `output_script_hash`, `input_prev_outpoint`, `version`, `transaction_id`, `internal_key`, `tapleaf_version`, `tappath`, `script_cmr`, and more |
 | **Utility** | `verify` |
 
+Run `simgo -list-jets` to print the full list.
+
 ---
 
 ## Types
@@ -91,7 +102,7 @@ See [docs/contract-patterns.md](docs/contract-patterns.md) for Go source and gen
 ## Architecture
 
 ```
-cmd/simgo/          # CLI binary (-input, -output, -target, -debug flags)
+cmd/simgo/          # CLI binary (-input, -output, -target, -debug, -list-jets, -version)
 pkg/
 ├── compiler/       # Validation and orchestration
 ├── jets/           # Jet registry (91 jets)
@@ -121,8 +132,6 @@ tests/              # 60 tests
 ## Documentation
 
 - [Contract patterns & examples](docs/contract-patterns.md)
-- [Development roadmap](ROADMAP.md)
-- [Contributing](contributing.md)
 
 ---
 

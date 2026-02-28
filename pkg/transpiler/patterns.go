@@ -219,11 +219,3 @@ func (t *Transpiler) generateMatchExpression(match *MatchExpression, indent stri
 	sb.WriteString(fmt.Sprintf("%s}", indent))
 	return sb.String()
 }
-
-// SwitchCase represents a case in an if/switch on sum types
-type SwitchCase struct {
-	Condition string   // The condition (e.g., "w.IsLeft")
-	Pattern   string   // "Left" or "Right" for Either, "Some" or "None" for Option
-	VarExpr   string   // Expression to get the value (e.g., "w.Left")
-	Body      []string // Body statements
-}

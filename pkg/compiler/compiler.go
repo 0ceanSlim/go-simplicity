@@ -1,3 +1,5 @@
+// Package compiler validates Go source and orchestrates transpilation to
+// SimplicityHL or raw Simplicity bytecode.
 package compiler
 
 import (
@@ -47,13 +49,13 @@ func (c *Compiler) Compile(source, filename string) (string, error) {
 
 	// Validate that the Go code is compatible with Simplicity
 	if err := c.validateGoCode(file); err != nil {
-		return "", fmt.Errorf("Go code validation failed: %w", err)
+		return "", fmt.Errorf("go code validation failed: %w", err)
 	}
 
 	// Transpile to target format
 	switch c.config.Target {
 	case "simplicityhl":
-		return c.transpiler.ToSimplicityHL(file, c.fset)
+		return c.transpiler.ToSimplicityHL(file)
 	case "simplicity":
 		return "", fmt.Errorf("direct Simplicity compilation not yet implemented")
 	default:
