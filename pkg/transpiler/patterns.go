@@ -227,4 +227,3 @@ type SwitchCase struct {
 	VarExpr   string   // Expression to get the value (e.g., "w.Left")
 	Body      []string // Body statements
 }
-
