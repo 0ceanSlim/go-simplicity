@@ -703,6 +703,17 @@ func (t *Transpiler) evaluateJetArg(arg ast.Expr) (string, error) {
 			return fmt.Sprintf("%s.%s", varName, fieldName), nil
 		}
 		return t.evaluateExpression(arg)
+	case *ast.BinaryExpr:
+		// Binary expression used inline as a jet argument (e.g. jet.Verify(x == y)).
+		// Attempt to generate a runtime jet call for the comparison/operation.
+		// A synthetic var name is used since this result is used inline, not bound.
+		if jc, ok := t.binaryExprToJetCall("__inline", a); ok {
+			if jc.Args == "" {
+				return fmt.Sprintf("jet::%s()", jc.JetName), nil
+			}
+			return fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args), nil
+		}
+		return t.evaluateExpression(arg)
 	case *ast.CallExpr:
 		// Handle nested jet calls like jet.SHA256Init()
 		return t.evaluateCallExpr(a)
@@ -1120,11 +1131,19 @@ func (t *Transpiler) isRuntimeRef(s string) bool {
 	return false
 }
 
-// inferOperandTypeWidth picks u8/u16/u32/u64 from the types of two operands.
-// Defaults to u32 (the most common width for heights, sequences, indices).
+// inferOperandTypeWidth picks u8/u16/u32/u64/u128/u256 from the types of two
+// operands. Defaults to u32 (the most common width for heights, sequences,
+// indices). u256 takes priority over everything (asset IDs, script hashes);
+// u128 is checked next (products of two u64 values).
 func (t *Transpiler) inferOperandTypeWidth(left, right ast.Expr) string {
 	lt := t.inferExprType(left)
 	rt := t.inferExprType(right)
+	if lt == "u256" || rt == "u256" {
+		return "u256"
+	}
+	if lt == "u128" || rt == "u128" {
+		return "u128"
+	}
 	if lt == "u64" || rt == "u64" {
 		return "u64"
 	}
@@ -1205,6 +1224,10 @@ func (t *Transpiler) operatorToJetName(op token.Token, width string) (name strin
 		suffix = "16"
 	case "u64":
 		suffix = "64"
+	case "u128":
+		suffix = "128"
+	case "u256":
+		suffix = "256"
 	}
 	if spec, ok := opJetMap[op]; ok {
 		return spec.prefix + suffix, spec.swapArgs
