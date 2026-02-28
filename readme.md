@@ -40,7 +40,7 @@ make test
 - **Helper function inlining** — user-defined helper functions are emitted as named functions and inlined at call sites
 - **Operator mapping** — `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `==`, `&`, `|`, `^` auto-map to the correct `add_N`/`subtract_N`/`lt_N`/`and_N`/etc. jet based on operand width
 - **SHA256Add auto-select** — `jet.SHA256Add(ctx, data)` resolves to the correctly-sized `sha_256_ctx_8_add_N` variant at transpile time
-- **88 jets registered** across signature, hash, arithmetic, comparison, bitwise, time lock, and transaction introspection categories
+- **97 jets registered** across signature, hash, arithmetic, comparison, bitwise, time lock, transaction introspection, and Elements amount/issuance categories
 
 ---
 
@@ -66,7 +66,7 @@ See [docs/contract-patterns.md](docs/contract-patterns.md) for Go source and gen
 
 ## Available Jets
 
-88 jets registered. Quick reference by category:
+97 jets registered. Quick reference by category:
 
 | Category | Jets |
 |----------|------|
@@ -77,6 +77,8 @@ See [docs/contract-patterns.md](docs/contract-patterns.md) for Go source and gen
 | **Bitwise** | `and/or/xor/complement_N` (N = 8/16/32/64) |
 | **Time locks** | `check_lock_height/time/distance/duration`, `tx_lock_*`, `tx_is_final` |
 | **Tx introspection** | `num_inputs/outputs`, `output_script_hash`, `input_prev_outpoint`, `version`, `transaction_id`, `internal_key`, `tapleaf_version`, `tappath`, `script_cmr`, and more |
+| **Elements amounts** | `output_asset`, `output_amount`, `input_asset`, `input_amount`, `current_asset`, `current_amount` |
+| **Elements issuance** | `issuance_asset_amount`, `issuance_token_amount`, `new_issuance_contract` |
 | **Utility** | `verify` |
 
 Run `simgo -list-jets` to print the full list.
@@ -105,7 +107,7 @@ Run `simgo -list-jets` to print the full list.
 cmd/simgo/          # CLI binary (-input, -output, -target, -debug, -list-jets, -version)
 pkg/
 ├── compiler/       # Validation and orchestration
-├── jets/           # Jet registry (88 jets)
+├── jets/           # Jet registry (97 jets)
 ├── transpiler/     # Core Go → SimplicityHL AST walker
 │   ├── transpiler.go   # Analysis, code generation, helper inlining
 │   ├── patterns.go     # Either/Option match extraction, switch dispatch

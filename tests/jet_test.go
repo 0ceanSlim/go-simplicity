@@ -527,6 +527,97 @@ func TestPhase9TaprootJetRegistry(t *testing.T) {
 	}
 }
 
+// TestElementsAmountJetRegistry verifies all Elements amount and issuance jets
+// are registered with correct Simplicity names and return types.
+func TestElementsAmountJetRegistry(t *testing.T) {
+	registry := jets.NewRegistry()
+
+	testCases := []struct {
+		goName         string
+		simplicityName string
+		returnType     string
+	}{
+		// Output amount jets
+		{"OutputAsset", "output_asset", "u256"},
+		{"OutputAmount", "output_amount", "u64"},
+		// Input amount jets
+		{"InputAsset", "input_asset", "u256"},
+		{"InputAmount", "input_amount", "u64"},
+		// Current input jets
+		{"CurrentAsset", "current_asset", "u256"},
+		{"CurrentAmount", "current_amount", "u64"},
+		// Issuance jets
+		{"IssuanceAssetAmount", "issuance_asset_amount", "u64"},
+		{"IssuanceTokenAmount", "issuance_token_amount", "u64"},
+		{"NewIssuanceContract", "new_issuance_contract", "u256"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.goName, func(t *testing.T) {
+			info, found := registry.Lookup(tc.goName)
+			if !found {
+				t.Errorf("Elements jet %s should be registered", tc.goName)
+				return
+			}
+			if info.SimplicityName != tc.simplicityName {
+				t.Errorf("%s: expected SimplicityName %q, got %q", tc.goName, tc.simplicityName, info.SimplicityName)
+			}
+			if info.ReturnType != tc.returnType {
+				t.Errorf("%s: expected ReturnType %q, got %q", tc.goName, tc.returnType, info.ReturnType)
+			}
+		})
+	}
+}
+
+// TestElementsAmountJetCallGeneration verifies Elements amount jets compile to correct SimplicityHL.
+func TestElementsAmountJetCallGeneration(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	asset := jet.OutputAsset(0)
+	amount := jet.OutputAmount(0)
+	_ = asset
+	_ = amount
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if !strings.Contains(out, "jet::output_asset") {
+		t.Errorf("expected jet::output_asset in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "jet::output_amount") {
+		t.Errorf("expected jet::output_amount in output, got:\n%s", out)
+	}
+}
+
+// TestElementsIssuanceJetCallGeneration verifies issuance jets compile to correct SimplicityHL.
+func TestElementsIssuanceJetCallGeneration(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	lpMinted := jet.IssuanceAssetAmount(0)
+	_ = lpMinted
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if !strings.Contains(out, "jet::issuance_asset_amount") {
+		t.Errorf("expected jet::issuance_asset_amount in output, got:\n%s", out)
+	}
+}
+
 // TestSHA256AutoSelect verifies that jet.SHA256Add auto-selects the correct variant
 // based on the argument type at transpile time.
 func TestSHA256AutoSelect(t *testing.T) {

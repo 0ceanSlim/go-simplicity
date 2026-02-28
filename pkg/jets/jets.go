@@ -251,6 +251,36 @@ func (r *JetRegistry) registerBuiltinJets() {
 	// Low-level SHA-256 primitives
 	r.jets["SHA256Block"] = JetInfo{GoName: "SHA256Block", SimplicityName: "sha_256_block", ParamTypes: []string{"u256", "[u8; 64]"}, ReturnType: "u256"}
 	r.jets["SHA256IV"] = JetInfo{GoName: "SHA256IV", SimplicityName: "sha_256_iv", ParamTypes: []string{}, ReturnType: "u256"}
+
+	// -------------------------------------------------------------------------
+	// Elements amount introspection jets (Liquid/Elements only)
+	// These jets read explicit (non-confidential) asset IDs and satoshi values
+	// from transaction inputs and outputs. They fail if the amount is
+	// confidential (Pedersen commitment). Use these for AMM invariant checking.
+	// -------------------------------------------------------------------------
+
+	// Output amount jets — read asset and value of a specific output by index
+	r.jets["OutputAsset"] = JetInfo{GoName: "OutputAsset", SimplicityName: "output_asset", ParamTypes: []string{"u32"}, ReturnType: "u256"}
+	r.jets["OutputAmount"] = JetInfo{GoName: "OutputAmount", SimplicityName: "output_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
+
+	// Input amount jets — read asset and value of a specific input by index
+	r.jets["InputAsset"] = JetInfo{GoName: "InputAsset", SimplicityName: "input_asset", ParamTypes: []string{"u32"}, ReturnType: "u256"}
+	r.jets["InputAmount"] = JetInfo{GoName: "InputAmount", SimplicityName: "input_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
+
+	// Current input jets — read asset and value of the input currently being spent
+	r.jets["CurrentAsset"] = JetInfo{GoName: "CurrentAsset", SimplicityName: "current_asset", ParamTypes: []string{}, ReturnType: "u256"}
+	r.jets["CurrentAmount"] = JetInfo{GoName: "CurrentAmount", SimplicityName: "current_amount", ParamTypes: []string{}, ReturnType: "u64"}
+
+	// -------------------------------------------------------------------------
+	// Elements asset issuance jets (Liquid/Elements only)
+	// Used for LP token creation and reissuance in AMM pools.
+	// IssuanceAssetAmount: explicit amount of new asset minted at input N
+	// IssuanceTokenAmount: explicit amount of reissuance token minted at input N
+	// NewIssuanceContract: contract hash that determines the issued asset ID
+	// -------------------------------------------------------------------------
+	r.jets["IssuanceAssetAmount"] = JetInfo{GoName: "IssuanceAssetAmount", SimplicityName: "issuance_asset_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
+	r.jets["IssuanceTokenAmount"] = JetInfo{GoName: "IssuanceTokenAmount", SimplicityName: "issuance_token_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
+	r.jets["NewIssuanceContract"] = JetInfo{GoName: "NewIssuanceContract", SimplicityName: "new_issuance_contract", ParamTypes: []string{"u32"}, ReturnType: "u256"}
 }
 
 // Lookup returns the jet info for a given Go function name
