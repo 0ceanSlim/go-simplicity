@@ -1,37 +1,35 @@
 # go-simplicity Release Roadmap
 
-> Current state: Phase 4 complete — P2PK, HTLC, 2-of-3 Multisig working.
+> Current state: Phase 6 complete — Real atomic swap & covenant examples, `check_lock_height` and `output_script_hash` transpilation verified end-to-end.
 > Goal: Fully functional transpiler covering all mainstream Bitcoin/Elements contract patterns.
 
 ---
 
-## Gap Analysis (Post Phase 4)
+## Gap Analysis (Post Phase 5)
 
 ### Jet Coverage
-Currently 14 jets registered. SimplicityHL exposes ~500+:
-- **Arithmetic**: 0 of 128 registered — no `add_32`, `subtract_32`, `multiply_32`, etc.
-- **Multi-bit logic**: 0 of 288 registered — no `and_32`, `or_32`, `xor_32`, shift/rotate ops
-- **Hash variants**: 3 of 15 — missing `add_1/2/4/8/16/64/128/256/512`, `sha_256_block`, `sha_256_iv`
-- **Time locks**: 1 of 9 — missing `check_lock_time`, `tx_is_final`, `tx_lock_height`, `tx_lock_distance/duration`
-- **Transaction introspection**: 4 of 50+ — missing `num_inputs/outputs`, `output_amount`, `output_script_hash`, `current_sequence`, `input_prev_outpoint`, `version`, `transaction_id`, `internal_key`, `tapleaf_version`, `tappath`, `script_cmr`, and many more
+Currently 86 jets registered across all categories:
+- **Arithmetic**: add/subtract/multiply (8/16/32/64), divide/modulo (32/64) — ✓ complete
+- **Comparison**: lt/le/eq (8/16/32/64) — ✓ complete
+- **Bitwise logic**: and/or/xor/complement (8/16/32/64), left/right shift — ✓ complete
+- **Hash variants**: SHA256 add variants (1–64 bytes), sha_256_block, sha_256_iv — ✓ complete
+- **Time locks**: check_lock_time/height/distance/duration, tx_is_final, tx_lock_* — ✓ complete
+- **Transaction introspection**: num_inputs/outputs, output_amount, output_script_hash, current_sequence, input_prev_outpoint, version, transaction_id, internal_key, tapleaf_version, tappath, script_cmr, and more — ✓ complete
 
 ### Transpiler Logic
 - `analyzeFunctionBody` is a stub — helper functions are never actually transpiled, always returns `"true"`
 - `evaluateCallExpr` hardcoded: non-jet function calls always return `"true"`
 - `analyzeSwitchAsMatch` is a stub — `switch {}` statements silently ignored
-- Arithmetic operators (`+`, `-`, `*`, `/`, `%`) not mapped to jet calls — evaluated as constants only
-- Bitwise operators (`&`, `|`, `^`, `<<`, `>>`) not mapped to jet calls at all
+- Arithmetic/comparison/bitwise operators (`+`, `-`, `*`, `/`, `%`, `<`, `<=`, `==`, `&`, `|`, `^`) **mapped to jet calls** ✓
 - No multi-path Either (3+ spending paths)
 
 ### Examples
 - `atomic_swap.go` uses no jets — placeholder only
-- No timelock-only contract example
-- No amount-verification contract example
 - No covenant/script-hash contract example
 
 ---
 
-## Phase 5 — Arithmetic & Logic Jets
+## ✅ Phase 5 — Arithmetic & Logic Jets (Complete)
 
 **Goal**: Enable numeric arithmetic and bitwise operations in contracts.
 
@@ -68,7 +66,7 @@ In the transpiler, map binary expressions inside `main()` to jet calls:
 
 ---
 
-## Phase 6 — Complete Time Locks & Transaction Introspection
+## ✅ Phase 6 — Complete Time Locks & Transaction Introspection (Complete)
 
 **Goal**: Full Bitcoin/Elements primitive coverage for real contract patterns.
 
@@ -104,11 +102,11 @@ Core Bitcoin subset:
 ### 6.3 — Transpiler: Timelock Pattern Generation
 Support `jet.CheckLockHeight(height)` and `jet.CheckLockTime(t)` as standalone statements that emit directly as `jet::check_lock_height(param::MIN_HEIGHT)`.
 
-### 6.4 — Example: Real Atomic Swap
+### 6.4 — Example: Real Atomic Swap ✅
 Rewrite `atomic_swap.go` using actual jets:
 - Either path: Left = hashlock (SHA-256 preimage + BIP340), Right = timelock refund (CheckLockHeight + BIP340)
 
-### 6.5 — Example: Covenant Contract
+### 6.5 — Example: Covenant Contract ✅
 `covenant.go` — verifies the script hash of an output matches a known hash:
 - Uses `output_script_hash`, `eq_256`, `verify`
 
@@ -211,13 +209,13 @@ When a `SHA256Add*` call is made, auto-select the correctly-sized variant based 
 
 ## Priority Order
 
-| Phase | Value | Effort | Start |
-|-------|-------|--------|-------|
-| **5** — Arithmetic & Logic Jets | High | Medium | Now |
-| **6** — Time Locks + Tx Introspection | High | Medium | After 5 |
+| Phase | Value | Effort | Status |
+|-------|-------|--------|--------|
+| **5** — Arithmetic & Logic Jets | High | Medium | ✅ Complete |
+| **6** — Time Locks + Tx Introspection | High | Medium | ✅ Complete |
 | **7** — Helper Functions / Control Flow | High | High | After 6 |
 | **8** — SHA-256 Variants | Medium | Low | Parallel w/ 7 |
 | **9** — Advanced Examples | Medium | Medium | After 7 |
 | **10** — Release Quality | Medium | Medium | Last |
 
-**Recommended start**: Phase 5 (arithmetic jets + operator mapping) — self-contained, high value, unblocks amount-based contracts immediately.
+**Recommended start**: Phase 6 — jets are registered, transpiler just needs the timelock/introspection call patterns and real atomic swap example.

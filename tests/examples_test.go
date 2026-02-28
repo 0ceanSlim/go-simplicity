@@ -219,6 +219,82 @@ func TestExampleHTLCTestable(t *testing.T) {
 	}
 }
 
+// TestExampleAtomicSwap verifies the atomic swap example compiles to correct SimplicityHL.
+func TestExampleAtomicSwap(t *testing.T) {
+	out := compileExample(t, "../examples/atomic_swap.go")
+	assertNoInvalidWitness(t, "atomic_swap", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"Either witness type", "Either<([u8; 32], [u8; 64]), [u8; 64]>"},
+		{"Either witness Left placeholder", "Left((0x" + strings.Repeat("00", 32) + ", 0x" + strings.Repeat("00", 64) + "))"},
+		{"recipient pubkey param", "RECIPIENT_PUBKEY: u256"},
+		{"sender pubkey param", "SENDER_PUBKEY: u256"},
+		{"hash lock param", "HASH_LOCK: u256"},
+		{"min refund height param", "MIN_REFUND_HEIGHT: u32"},
+		{"match expression", "match witness::W {"},
+		{"Left arm", "Left(data)"},
+		{"Right arm", "Right(sig)"},
+		{"destructuring", "let (preimage, recipient_sig):"},
+		{"sha_256_ctx_8_init jet", "jet::sha_256_ctx_8_init()"},
+		{"sha_256_ctx_8_add_32 jet", "jet::sha_256_ctx_8_add_32("},
+		{"sha_256_ctx_8_finalize jet", "jet::sha_256_ctx_8_finalize("},
+		{"eq_256 jet", "jet::eq_256("},
+		{"check_lock_height jet", "jet::check_lock_height("},
+		{"min refund height in check", "param::MIN_REFUND_HEIGHT"},
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("atomic_swap: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// witness::W.field must NOT appear inside match arm bodies (bound vars should be used)
+	if strings.Contains(out, "witness::W.preimage") {
+		t.Error("atomic_swap: Left arm should use 'preimage' not 'witness::W.preimage'")
+	}
+	if strings.Contains(out, "witness::W.recipient_sig") {
+		t.Error("atomic_swap: Left arm should use 'recipient_sig' not 'witness::W.recipient_sig'")
+	}
+	if strings.Contains(out, "witness::W.sender_sig") {
+		t.Error("atomic_swap: Right arm should use 'sig' not 'witness::W.sender_sig'")
+	}
+}
+
+// TestExampleCovenant verifies the covenant example compiles to correct SimplicityHL.
+func TestExampleCovenant(t *testing.T) {
+	out := compileExample(t, "../examples/covenant.go")
+	assertNoInvalidWitness(t, "covenant", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"sig witness type", "const SIG: [u8; 64]"},
+		{"sig witness zero value", "0x" + strings.Repeat("00", 64)},
+		{"expected script hash param", "EXPECTED_SCRIPT_HASH: u256"},
+		{"owner pubkey param", "OWNER_PUBKEY: u256"},
+		{"output index param", "OUTPUT_INDEX: u32"},
+		{"main function", "fn main()"},
+		{"output_script_hash jet", "jet::output_script_hash("},
+		{"output index in call", "param::OUTPUT_INDEX"},
+		{"eq_256 jet", "jet::eq_256("},
+		{"sig_all_hash jet", "jet::sig_all_hash()"},
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+		{"sig witness in verify", "witness::SIG"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("covenant: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+}
+
 // TestExampleMultisig verifies the 2-of-3 multisig example compiles to correct SimplicityHL.
 func TestExampleMultisig(t *testing.T) {
 	out := compileExample(t, "../examples/multisig.go")
