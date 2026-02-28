@@ -180,9 +180,8 @@ func (t *Transpiler) analyzeReturnStmt(stmt *ast.ReturnStmt) (string, error) {
 }
 
 // analyzeDeclStmt handles variable declarations
-func (t *Transpiler) analyzeDeclStmt(stmt *ast.DeclStmt) (string, error) {
-	// For now, skip declarations inside match arms
-	// They're usually handled as witness values
+func (t *Transpiler) analyzeDeclStmt(_ *ast.DeclStmt) (string, error) {
+	// Skip declarations inside match arms — handled as witness values
 	return "", nil
 }
 
@@ -229,79 +228,3 @@ type SwitchCase struct {
 	Body      []string // Body statements
 }
 
-// analyzeSumTypeSwitch analyzes if/else chains that act as pattern matching
-func (t *Transpiler) analyzeSumTypeSwitch(ifStmt *ast.IfStmt, scrutinee string) (*MatchExpression, error) {
-	match := &MatchExpression{
-		Scrutinee: scrutinee,
-	}
-
-	// Analyze the if branch
-	leftCase, err := t.analyzeIfBranch(ifStmt, "Left")
-	if err != nil {
-		return nil, err
-	}
-	if leftCase != nil {
-		match.Cases = append(match.Cases, *leftCase)
-	}
-
-	// Analyze the else branch
-	if ifStmt.Else != nil {
-		if elseBlock, ok := ifStmt.Else.(*ast.BlockStmt); ok {
-			rightCase := &MatchCase{
-				Pattern: "Right",
-			}
-			for _, stmt := range elseBlock.List {
-				stmtStr, err := t.analyzeStatement(stmt)
-				if err != nil {
-					return nil, err
-				}
-				if stmtStr != "" {
-					rightCase.BodyStmts = append(rightCase.BodyStmts, stmtStr)
-				}
-			}
-			match.Cases = append(match.Cases, *rightCase)
-		}
-	}
-
-	return match, nil
-}
-
-// analyzeIfBranch extracts pattern info from an if branch
-func (t *Transpiler) analyzeIfBranch(ifStmt *ast.IfStmt, defaultPattern string) (*MatchCase, error) {
-	mc := &MatchCase{
-		Pattern: defaultPattern,
-	}
-
-	// Analyze the condition to determine pattern
-	if binary, ok := ifStmt.Cond.(*ast.BinaryExpr); ok {
-		// Check for w.IsLeft or similar
-		if sel, ok := binary.X.(*ast.SelectorExpr); ok {
-			fieldName := sel.Sel.Name
-			if fieldName == "IsLeft" {
-				mc.Pattern = "Left"
-			} else if fieldName == "IsSome" {
-				mc.Pattern = "Some"
-			}
-		}
-	} else if sel, ok := ifStmt.Cond.(*ast.SelectorExpr); ok {
-		fieldName := sel.Sel.Name
-		if fieldName == "IsLeft" {
-			mc.Pattern = "Left"
-		} else if fieldName == "IsSome" {
-			mc.Pattern = "Some"
-		}
-	}
-
-	// Analyze the body
-	for _, stmt := range ifStmt.Body.List {
-		stmtStr, err := t.analyzeStatement(stmt)
-		if err != nil {
-			return nil, err
-		}
-		if stmtStr != "" {
-			mc.BodyStmts = append(mc.BodyStmts, stmtStr)
-		}
-	}
-
-	return mc, nil
-}

@@ -376,9 +376,10 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 	}
 
 	// For Some pattern, add a variable binding
-	if pattern == "Some" {
+	switch pattern {
+	case "Some":
 		thenCase.VarName = "sig"
-	} else if pattern == "Left" {
+	case "Left":
 		thenCase.VarName = "data"
 	}
 
@@ -619,9 +620,10 @@ func (t *Transpiler) analyzeSwitchAsMatch(switchStmt *ast.SwitchStmt) (*MatchExp
 		}
 
 		mc := MatchCase{Pattern: pattern}
-		if pattern == "Left" {
+		switch pattern {
+		case "Left":
 			mc.VarName = "data"
-		} else if pattern == "Right" || pattern == "Some" {
+		case "Right", "Some":
 			mc.VarName = "sig"
 		}
 
@@ -1336,13 +1338,6 @@ func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, e
 	return fmt.Sprintf("jet::%s(%s)", jetInfo.SimplicityName, strings.Join(argStrs, ", ")), nil
 }
 
-func (t *Transpiler) extractIdentifier(expr ast.Expr) string {
-	if ident, ok := expr.(*ast.Ident); ok {
-		return ident.Name
-	}
-	return ""
-}
-
 func (t *Transpiler) generateCode() {
 	// Generate witness module
 	t.writeLine("mod witness {")
@@ -1529,10 +1524,11 @@ func (t *Transpiler) generateMultisigMatchCode() {
 				pattern = fmt.Sprintf("%s(%s)", mc.Pattern, mc.VarName)
 			}
 
-			if mc.Pattern == "None" {
+			switch mc.Pattern {
+			case "None":
 				// None arm: no block braces, just the value
 				t.writeLine("            None => 0,")
-			} else if mc.Pattern == "Some" {
+			case "Some":
 				t.writeLine(fmt.Sprintf("            %s => {", pattern))
 				// Jet calls are statements; they need semicolons before the return value
 				for _, stmt := range mc.BodyStmts {
@@ -1540,7 +1536,7 @@ func (t *Transpiler) generateMultisigMatchCode() {
 				}
 				t.writeLine("                1")
 				t.writeLine("            },")
-			} else {
+			default:
 				t.writeLine(fmt.Sprintf("            %s => {", pattern))
 				for _, stmt := range mc.BodyStmts {
 					t.writeLine(fmt.Sprintf("                %s", stmt))
@@ -1553,7 +1549,7 @@ func (t *Transpiler) generateMultisigMatchCode() {
 
 	// Final verification - require at least 2 signatures
 	t.writeLine("")
-	t.writeLine(fmt.Sprintf("    // Require at least 2 valid signatures"))
+	t.writeLine("    // Require at least 2 valid signatures")
 	t.writeLine(fmt.Sprintf("    jet::verify(jet::le_32(2, count_%d))", len(t.matchExprs)-1))
 }
 

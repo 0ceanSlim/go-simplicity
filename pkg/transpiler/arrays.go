@@ -8,14 +8,6 @@ import (
 	"strings"
 )
 
-// ArrayLiteral represents a compile-time array constant
-type ArrayLiteral struct {
-	Name     string
-	ElemType string
-	Length   int
-	Elements []string
-}
-
 // UnrolledLoop represents a for loop that has been unrolled
 type UnrolledLoop struct {
 	IndexVar   string
@@ -45,43 +37,6 @@ func (t *Transpiler) evaluateIndexExpr(expr *ast.IndexExpr) (string, error) {
 
 	// For variable indices, use bracket notation
 	return fmt.Sprintf("%s[%s]", arrayExpr, indexExpr), nil
-}
-
-// analyzeArrayLiteral extracts array literal information
-func (t *Transpiler) analyzeArrayLiteral(name string, compLit *ast.CompositeLit) (*ArrayLiteral, error) {
-	arr := &ArrayLiteral{
-		Name: t.toSnakeCase(name),
-	}
-
-	// Get array type info
-	if arrayType, ok := compLit.Type.(*ast.ArrayType); ok {
-		// Get length
-		if lengthLit, ok := arrayType.Len.(*ast.BasicLit); ok {
-			length, err := strconv.Atoi(lengthLit.Value)
-			if err != nil {
-				return nil, fmt.Errorf("invalid array length: %s", lengthLit.Value)
-			}
-			arr.Length = length
-		}
-
-		// Get element type
-		elemType, err := t.typeMapper.MapGoType(arrayType.Elt)
-		if err != nil {
-			return nil, err
-		}
-		arr.ElemType = elemType
-	}
-
-	// Get elements
-	for _, elt := range compLit.Elts {
-		elemStr, err := t.evaluateExpression(elt)
-		if err != nil {
-			return nil, err
-		}
-		arr.Elements = append(arr.Elements, elemStr)
-	}
-
-	return arr, nil
 }
 
 // unrollForLoop converts a bounded for loop into unrolled statements
@@ -189,7 +144,7 @@ func (t *Transpiler) analyzeIfStmtWithIndex(ifStmt *ast.IfStmt, indexVar string,
 }
 
 // extractConditionWithIndex extracts condition info with index substitution
-func (t *Transpiler) extractConditionWithIndex(cond ast.Expr, indexVar string, indexVal int) (string, string) {
+func (t *Transpiler) extractConditionWithIndex(cond ast.Expr, _ string, indexVal int) (string, string) {
 	if sel, ok := cond.(*ast.SelectorExpr); ok {
 		// sigs[i].IsSome -> witness::SIGS[indexVal]
 		if idx, ok := sel.X.(*ast.IndexExpr); ok {
@@ -329,7 +284,7 @@ func (t *Transpiler) analyzeAssignStmtWithIndex(stmt *ast.AssignStmt, indexVar s
 }
 
 // analyzeIncDecStmtWithIndex handles increment/decrement statements
-func (t *Transpiler) analyzeIncDecStmtWithIndex(stmt *ast.IncDecStmt, indexVar string, indexVal int) (string, error) {
+func (t *Transpiler) analyzeIncDecStmtWithIndex(stmt *ast.IncDecStmt, _ string, _ int) (string, error) {
 	// validCount++ becomes part of accumulation logic
 	if ident, ok := stmt.X.(*ast.Ident); ok {
 		varName := t.toSnakeCase(ident.Name)
@@ -341,54 +296,9 @@ func (t *Transpiler) analyzeIncDecStmtWithIndex(stmt *ast.IncDecStmt, indexVar s
 	return "", nil
 }
 
-// generateCounterAccumulation generates counter accumulation code
-func (t *Transpiler) generateCounterAccumulation(counterVar string, iterations int, checkFunc string, args [][]string) string {
-	var sb strings.Builder
-
-	for i := 0; i < iterations; i++ {
-		if i == 0 {
-			sb.WriteString(fmt.Sprintf("    let %s_%d: u32 = %s(%s);\n",
-				counterVar, i, checkFunc, strings.Join(args[i], ", ")))
-		} else {
-			sb.WriteString(fmt.Sprintf("    let %s_%d: u32 = %s_%d + %s(%s);\n",
-				counterVar, i, counterVar, i-1, checkFunc, strings.Join(args[i], ", ")))
-		}
-	}
-
-	// Final counter value
-	sb.WriteString(fmt.Sprintf("    let %s: u32 = %s_%d;\n", counterVar, counterVar, iterations-1))
-
-	return sb.String()
-}
-
 // ArrayConstant represents a compile-time constant array
 type ArrayConstant struct {
 	Name     string
 	Type     string
 	Elements []string
-}
-
-// analyzeArrayConstant extracts array constant information
-func (t *Transpiler) analyzeArrayConstant(name string, arrayType *ast.ArrayType, compLit *ast.CompositeLit) (*ArrayConstant, error) {
-	ac := &ArrayConstant{
-		Name: strings.ToUpper(t.toSnakeCase(name)),
-	}
-
-	// Get the full type
-	fullType, err := t.typeMapper.MapGoType(arrayType)
-	if err != nil {
-		return nil, err
-	}
-	ac.Type = fullType
-
-	// Get element values
-	for _, elt := range compLit.Elts {
-		elemStr, err := t.evaluateExpression(elt)
-		if err != nil {
-			return nil, err
-		}
-		ac.Elements = append(ac.Elements, elemStr)
-	}
-
-	return ac, nil
 }
