@@ -22,21 +22,22 @@ type EitherFieldInfo struct {
 
 // Transpiler converts Go AST to SimplicityHL
 type Transpiler struct {
-	typeMapper      *simplicity_types.TypeMapper
-	jetRegistry     *jets.JetRegistry
-	output          strings.Builder
-	witnessValues   []WitnessValue
-	constants       []Constant
-	functions       []Function
-	jetCalls        []JetCall                   // Track jet calls for code generation
-	mainBodyStmts   []string                    // Store main function body statements
-	matchExprs      []*MatchExpression          // Track match expressions
-	hasMatchExpr    bool                        // Flag to indicate main has match expression
-	unrolledLoops   []*UnrolledLoop             // Track unrolled for loops
-	hasUnrolledLoop bool                        // Flag to indicate main has unrolled loops
-	arrayConstants  []*ArrayConstant            // Track array constants for param module
-	customTypes     map[string]string           // Map custom type names to Simplicity types
-	eitherFields    map[string]*EitherFieldInfo // Go struct name → field info for Either types
+	typeMapper       *simplicity_types.TypeMapper
+	jetRegistry      *jets.JetRegistry
+	output           strings.Builder
+	witnessValues    []WitnessValue
+	constants        []Constant
+	functions        []Function
+	jetCalls         []JetCall                   // Track jet calls for code generation
+	mainBodyStmts    []string                    // Store main function body statements
+	matchExprs       []*MatchExpression          // Track match expressions
+	hasMatchExpr     bool                        // Flag to indicate main has match expression
+	unrolledLoops    []*UnrolledLoop             // Track unrolled for loops
+	hasUnrolledLoop  bool                        // Flag to indicate main has unrolled loops
+	arrayConstants   []*ArrayConstant            // Track array constants for param module
+	customTypes      map[string]string           // Map custom type names to Simplicity types
+	eitherFields     map[string]*EitherFieldInfo // Go struct name → field info for Either types
+	structFieldTypes map[string]string           // "StructName.FieldName" → Simplicity type (for SHA256Add auto-select)
 }
 
 // JetCall represents a jet function call in the code
@@ -97,6 +98,7 @@ func (t *Transpiler) ToSimplicityHL(file *ast.File, fset *token.FileSet) (string
 	t.arrayConstants = nil
 	t.customTypes = make(map[string]string)
 	t.eitherFields = make(map[string]*EitherFieldInfo)
+	t.structFieldTypes = make(map[string]string)
 
 	// Phase 1: Analyze the code and extract all computable values
 	if err := t.analyzeCode(file); err != nil {
@@ -221,6 +223,10 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 							if selIdent, ok := sel.X.(*ast.Ident); ok && selIdent.Name == "jet" {
 								// This is a jet call assignment: varName := jet.X()
 								jetName := sel.Sel.Name
+								// SHA256Add auto-select: resolve before registry lookup
+								if jetName == "SHA256Add" && len(callExpr.Args) >= 2 {
+									jetName = sha256AddNameForType(t.inferArgType(callExpr.Args[1]))
+								}
 								jetInfo, found := t.jetRegistry.Lookup(jetName)
 								if !found {
 									return fmt.Errorf("unknown jet function: jet.%s", jetName)
@@ -806,6 +812,7 @@ func (t *Transpiler) analyzeConstants(genDecl *ast.GenDecl) error {
 }
 
 // analyzeTypeDeclarations processes type declarations to detect Option/Either patterns
+// and record individual field types for SHA256Add auto-select.
 func (t *Transpiler) analyzeTypeDeclarations(genDecl *ast.GenDecl) error {
 	for _, spec := range genDecl.Specs {
 		if typeSpec, ok := spec.(*ast.TypeSpec); ok {
@@ -813,6 +820,10 @@ func (t *Transpiler) analyzeTypeDeclarations(genDecl *ast.GenDecl) error {
 
 			// Check if this is a struct type
 			if structType, ok := typeSpec.Type.(*ast.StructType); ok {
+				// Record every non-discriminator field type keyed as "TypeName.FieldName"
+				// so SHA256Add can auto-select the right sized jet from a struct field arg.
+				t.recordStructFieldTypes(typeName, structType)
+
 				// Check if this struct follows the Option pattern
 				// Pattern: { IsSome bool; Value T }
 				if optionType := t.detectOptionPattern(structType); optionType != "" {
@@ -831,6 +842,22 @@ func (t *Transpiler) analyzeTypeDeclarations(genDecl *ast.GenDecl) error {
 		}
 	}
 	return nil
+}
+
+// recordStructFieldTypes stores "TypeName.FieldName" → Simplicity type for each non-bool field.
+func (t *Transpiler) recordStructFieldTypes(typeName string, structType *ast.StructType) {
+	if structType.Fields == nil {
+		return
+	}
+	for _, field := range structType.Fields.List {
+		for _, name := range field.Names {
+			simType, err := t.typeMapper.MapGoType(field.Type)
+			if err != nil || simType == "bool" {
+				continue
+			}
+			t.structFieldTypes[typeName+"."+name.Name] = simType
+		}
+	}
 }
 
 // detectOptionPattern checks if a struct has the pattern { IsSome bool; Value T }
@@ -1307,8 +1334,95 @@ func (t *Transpiler) evaluateCallExpr(expr *ast.CallExpr) (string, error) {
 	return "true", nil
 }
 
+// byteWidthFromType returns the byte count for a Simplicity type used as SHA-256 input.
+// u8 → 1, [u8; N] → N, u256 → 32 (SHA-256 finalize output), default → 32.
+func byteWidthFromType(simType string) int {
+	if simType == "u8" {
+		return 1
+	}
+	if simType == "u256" {
+		return 32
+	}
+	if strings.HasPrefix(simType, "[u8; ") && strings.HasSuffix(simType, "]") {
+		if n, err := strconv.Atoi(simType[5 : len(simType)-1]); err == nil {
+			return n
+		}
+	}
+	return 32
+}
+
+// sha256AddNameForType maps a Simplicity data type to the correctly-sized SHA256AddN Go jet name.
+func sha256AddNameForType(simType string) string {
+	switch byteWidthFromType(simType) {
+	case 1:
+		return "SHA256Add1"
+	case 2:
+		return "SHA256Add2"
+	case 4:
+		return "SHA256Add4"
+	case 8:
+		return "SHA256Add8"
+	case 16:
+		return "SHA256Add16"
+	case 32:
+		return "SHA256Add32"
+	case 64:
+		return "SHA256Add64"
+	case 128:
+		return "SHA256Add128"
+	case 256:
+		return "SHA256Add256"
+	case 512:
+		return "SHA256Add512"
+	default:
+		return "SHA256Add32"
+	}
+}
+
+// inferArgType attempts to determine the Simplicity type of a call-site argument.
+// Used by SHA256Add auto-select to pick the right sha_256_ctx_8_add_N jet.
+func (t *Transpiler) inferArgType(arg ast.Expr) string {
+	switch a := arg.(type) {
+	case *ast.SelectorExpr:
+		// w.FieldName — look up the originating struct type, then the field
+		if ident, ok := a.X.(*ast.Ident); ok {
+			varName := strings.ToUpper(t.toSnakeCase(ident.Name))
+			for _, w := range t.witnessValues {
+				if strings.ToUpper(w.Name) == varName && w.GoTypeName != "" {
+					if typ, ok := t.structFieldTypes[w.GoTypeName+"."+a.Sel.Name]; ok {
+						return typ
+					}
+				}
+			}
+		}
+	case *ast.Ident:
+		// Plain witness variable (e.g., var preimage [32]byte)
+		varName := strings.ToUpper(t.toSnakeCase(a.Name))
+		for _, w := range t.witnessValues {
+			if strings.ToUpper(w.Name) == varName {
+				return w.Type
+			}
+		}
+	case *ast.CallExpr:
+		// jet.SHA256Finalize(...) returns u256 (= 32 bytes for the next round)
+		if sel, ok := a.Fun.(*ast.SelectorExpr); ok {
+			if selIdent, ok := sel.X.(*ast.Ident); ok && selIdent.Name == "jet" {
+				if jetInfo, found := t.jetRegistry.Lookup(sel.Sel.Name); found {
+					return jetInfo.ReturnType
+				}
+			}
+		}
+	}
+	return "[u8; 32]" // safe default
+}
+
 // evaluateJetCall handles jet.X() function calls
 func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, error) {
+	// SHA256Add auto-select: resolve to the correctly-sized variant before registry lookup
+	if jetName == "SHA256Add" && len(args) >= 2 {
+		jetName = sha256AddNameForType(t.inferArgType(args[1]))
+	}
+
 	// Look up the jet in the registry
 	jetInfo, found := t.jetRegistry.Lookup(jetName)
 	if !found {

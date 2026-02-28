@@ -376,3 +376,42 @@ func TestExampleMultisig(t *testing.T) {
 		t.Error("multisig: None arm should not use block braces")
 	}
 }
+
+// TestExampleDoubleSHA256 verifies the double-SHA256 example compiles to correct SimplicityHL,
+// including SHA256Add auto-select resolving to sha_256_ctx_8_add_32.
+func TestExampleDoubleSHA256(t *testing.T) {
+	out := compileExample(t, "../examples/double_sha256.go")
+	assertNoInvalidWitness(t, "double_sha256", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"preimage witness", "const PREIMAGE: [u8; 32]"},
+		{"sig witness", "const SIG: [u8; 64]"},
+		{"hash_lock param", "HASH_LOCK: u256"},
+		{"owner_pubkey param", "OWNER_PUBKEY: u256"},
+		{"main function", "fn main()"},
+		{"sha_256_ctx_8_init", "jet::sha_256_ctx_8_init()"},
+		{"sha_256_ctx_8_add_32 (auto-selected)", "jet::sha_256_ctx_8_add_32("},
+		{"sha_256_ctx_8_finalize", "jet::sha_256_ctx_8_finalize("},
+		{"inner_hash let binding", "let inner_hash:"},
+		{"outer_hash let binding", "let outer_hash:"},
+		{"eq_256", "jet::eq_256("},
+		{"sig_all_hash", "jet::sig_all_hash()"},
+		{"bip_0340_verify", "jet::bip_0340_verify("},
+		{"witness::PREIMAGE", "witness::PREIMAGE"},
+		{"witness::SIG", "witness::SIG"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("double_sha256: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// auto-select must NOT produce a 64-byte variant for this example
+	if strings.Contains(out, "sha_256_ctx_8_add_64") {
+		t.Error("double_sha256: unexpected sha_256_ctx_8_add_64 — should be add_32 for [32]byte input")
+	}
+}

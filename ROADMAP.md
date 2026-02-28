@@ -1,6 +1,6 @@
 # go-simplicity Release Roadmap
 
-> Current state: Phase 6 complete — Real atomic swap & covenant examples, `check_lock_height` and `output_script_hash` transpilation verified end-to-end.
+> Current state: Phase 8 complete — Full SHA-256 variant jet coverage, SHA256Add auto-select transpilation, double-SHA256 example end-to-end.
 > Goal: Fully functional transpiler covering all mainstream Bitcoin/Elements contract patterns.
 
 ---
@@ -129,11 +129,11 @@ Support nested `Either<A, Either<B, C>>` for contracts with 3+ spending conditio
 
 ---
 
-## Phase 8 — SHA-256 Variant Jets
+## ✅ Phase 8 — SHA-256 Variant Jets (Complete)
 
 **Goal**: Full SHA-256 family for hashing data of any size.
 
-### 8.1 — Register Remaining Hash Jets
+### ✅ 8.1 — Register Remaining Hash Jets
 - `SHA256Add1` → `sha_256_ctx_8_add_1`
 - `SHA256Add2` → `sha_256_ctx_8_add_2`
 - `SHA256Add4` → `sha_256_ctx_8_add_4`
@@ -146,11 +146,11 @@ Support nested `Either<A, Either<B, C>>` for contracts with 3+ spending conditio
 - `SHA256Block` → `sha_256_block`
 - `SHA256IV` → `sha_256_iv`
 
-### 8.2 — Auto-Select SHA256AddN
-When a `SHA256Add*` call is made, auto-select the correctly-sized variant based on the Go type of the argument (`[16]byte` → `add_16`, `[64]byte` → `add_64`, etc.) rather than requiring the user to manually pick the right function.
+### ✅ 8.2 — Auto-Select SHA256AddN
+When `jet.SHA256Add(ctx, data)` is written, the transpiler auto-selects the correctly-sized variant based on the Go type of `data` (`[16]byte` → `add_16`, `[64]byte` → `add_64`, `u256` → `add_32`, etc.) at transpile time. Intercepts are in both `analyzeMainFunction` and `evaluateJetCall`.
 
-### 8.3 — Example: Double SHA-256
-`double_sha256.go` — computes SHA256(SHA256(preimage)) and verifies against a stored hash. Demonstrates SHA-256 chaining with multiple add variants.
+### ✅ 8.3 — Example: Double SHA-256
+`double_sha256.go` — computes SHA256(SHA256(preimage)) and verifies against a stored hash. Demonstrates SHA-256 chaining and `SHA256Add` auto-select resolving to `sha_256_ctx_8_add_32`.
 
 ---
 
@@ -204,7 +204,7 @@ When a `SHA256Add*` call is made, auto-select the correctly-sized variant based 
 | **5** — Arithmetic & Logic Jets | High | Medium | ✅ Complete |
 | **6** — Time Locks + Tx Introspection | High | Medium | ✅ Complete |
 | **7** — Helper Functions / Control Flow | High | High | ✅ Complete |
-| **8** — SHA-256 Variants | Medium | Low | Parallel w/ 7 |
+| **8** — SHA-256 Variants | Medium | Low | ✅ Complete |
 | **9** — Advanced Examples | Medium | Medium | After 7 |
 | **10** — Release Quality | Medium | Medium | Last |
 

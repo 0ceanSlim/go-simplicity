@@ -242,6 +242,13 @@ func (r *JetRegistry) registerBuiltinJets() {
 	r.jets["SHA256Add8"] = JetInfo{GoName: "SHA256Add8", SimplicityName: "sha_256_ctx_8_add_8", ParamTypes: []string{"Ctx8", "[u8; 8]"}, ReturnType: "Ctx8"}
 	r.jets["SHA256Add16"] = JetInfo{GoName: "SHA256Add16", SimplicityName: "sha_256_ctx_8_add_16", ParamTypes: []string{"Ctx8", "[u8; 16]"}, ReturnType: "Ctx8"}
 	r.jets["SHA256Add64"] = JetInfo{GoName: "SHA256Add64", SimplicityName: "sha_256_ctx_8_add_64", ParamTypes: []string{"Ctx8", "[u8; 64]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add128"] = JetInfo{GoName: "SHA256Add128", SimplicityName: "sha_256_ctx_8_add_128", ParamTypes: []string{"Ctx8", "[u8; 128]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add256"] = JetInfo{GoName: "SHA256Add256", SimplicityName: "sha_256_ctx_8_add_256", ParamTypes: []string{"Ctx8", "[u8; 256]"}, ReturnType: "Ctx8"}
+	r.jets["SHA256Add512"] = JetInfo{GoName: "SHA256Add512", SimplicityName: "sha_256_ctx_8_add_512", ParamTypes: []string{"Ctx8", "[u8; 512]"}, ReturnType: "Ctx8"}
+
+	// Low-level SHA-256 primitives
+	r.jets["SHA256Block"] = JetInfo{GoName: "SHA256Block", SimplicityName: "sha_256_block", ParamTypes: []string{"u256", "[u8; 64]"}, ReturnType: "u256"}
+	r.jets["SHA256IV"] = JetInfo{GoName: "SHA256IV", SimplicityName: "sha_256_iv", ParamTypes: []string{}, ReturnType: "u256"}
 }
 
 // Lookup returns the jet info for a given Go function name

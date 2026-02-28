@@ -468,3 +468,79 @@ func TestCtx8Type(t *testing.T) {
 		t.Error("Ctx8 should be a supported type")
 	}
 }
+
+// TestPhase8SHA256VariantRegistry verifies that the Phase 8 SHA-256 variant jets are registered.
+func TestPhase8SHA256VariantRegistry(t *testing.T) {
+	registry := jets.NewRegistry()
+
+	variants := []struct {
+		goName         string
+		simplicityName string
+	}{
+		{"SHA256Add128", "sha_256_ctx_8_add_128"},
+		{"SHA256Add256", "sha_256_ctx_8_add_256"},
+		{"SHA256Add512", "sha_256_ctx_8_add_512"},
+		{"SHA256Block", "sha_256_block"},
+		{"SHA256IV", "sha_256_iv"},
+	}
+
+	for _, v := range variants {
+		t.Run(v.goName, func(t *testing.T) {
+			info, found := registry.Lookup(v.goName)
+			if !found {
+				t.Errorf("Phase 8 jet %s should be registered", v.goName)
+				return
+			}
+			if info.SimplicityName != v.simplicityName {
+				t.Errorf("%s: expected SimplicityName %q, got %q", v.goName, v.simplicityName, info.SimplicityName)
+			}
+		})
+	}
+}
+
+// TestSHA256AutoSelect verifies that jet.SHA256Add auto-selects the correct variant
+// based on the argument type at transpile time.
+func TestSHA256AutoSelect(t *testing.T) {
+	// A 64-byte witness variable should produce sha_256_ctx_8_add_64
+	source64 := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	var block [64]byte
+	ctx := jet.SHA256Add(jet.SHA256Init(), block)
+	hash := jet.SHA256Finalize(ctx)
+	jet.Eq256(hash, hash)
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out64, err := c.Compile(source64, "test.go")
+	if err != nil {
+		t.Fatalf("compile (64-byte) failed: %v", err)
+	}
+	if !strings.Contains(out64, "sha_256_ctx_8_add_64") {
+		t.Errorf("64-byte witness: expected sha_256_ctx_8_add_64, got:\n%s", out64)
+	}
+
+	// A 32-byte witness variable should produce sha_256_ctx_8_add_32
+	source32 := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	var data [32]byte
+	ctx := jet.SHA256Add(jet.SHA256Init(), data)
+	hash := jet.SHA256Finalize(ctx)
+	jet.Eq256(hash, hash)
+}
+`
+	out32, err := c.Compile(source32, "test.go")
+	if err != nil {
+		t.Fatalf("compile (32-byte) failed: %v", err)
+	}
+	if !strings.Contains(out32, "sha_256_ctx_8_add_32") {
+		t.Errorf("32-byte witness: expected sha_256_ctx_8_add_32, got:\n%s", out32)
+	}
+}
