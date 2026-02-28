@@ -40,7 +40,7 @@ make test
 - **Helper function inlining** — user-defined helper functions are emitted as named functions and inlined at call sites
 - **Operator mapping** — `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `==`, `&`, `|`, `^` auto-map to the correct `add_N`/`subtract_N`/`lt_N`/`and_N`/etc. jet based on operand width
 - **SHA256Add auto-select** — `jet.SHA256Add(ctx, data)` resolves to the correctly-sized `sha_256_ctx_8_add_N` variant at transpile time
-- **91 jets registered** across signature, hash, arithmetic, comparison, bitwise, time lock, and transaction introspection categories
+- **88 jets registered** across signature, hash, arithmetic, comparison, bitwise, time lock, and transaction introspection categories
 
 ---
 
@@ -66,7 +66,7 @@ See [docs/contract-patterns.md](docs/contract-patterns.md) for Go source and gen
 
 ## Available Jets
 
-91 jets registered. Quick reference by category:
+88 jets registered. Quick reference by category:
 
 | Category | Jets |
 |----------|------|
@@ -105,7 +105,7 @@ Run `simgo -list-jets` to print the full list.
 cmd/simgo/          # CLI binary (-input, -output, -target, -debug, -list-jets, -version)
 pkg/
 ├── compiler/       # Validation and orchestration
-├── jets/           # Jet registry (91 jets)
+├── jets/           # Jet registry (88 jets)
 ├── transpiler/     # Core Go → SimplicityHL AST walker
 │   ├── transpiler.go   # Analysis, code generation, helper inlining
 │   ├── patterns.go     # Either/Option match extraction, switch dispatch
