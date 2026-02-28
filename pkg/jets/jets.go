@@ -259,6 +259,15 @@ func (r *JetRegistry) registerBuiltinJets() {
 	// confidential (Pedersen commitment). Use these for AMM invariant checking.
 	// -------------------------------------------------------------------------
 
+	// -------------------------------------------------------------------------
+	// 128-bit comparison jets
+	// Needed for AMM invariant checks: multiply_64 returns u128, and we must
+	// compare two u128 products to verify k_new >= k_old.
+	// -------------------------------------------------------------------------
+	r.jets["Le128"] = JetInfo{GoName: "Le128", SimplicityName: "le_128", ParamTypes: []string{"u128", "u128"}, ReturnType: "bool"}
+	r.jets["Lt128"] = JetInfo{GoName: "Lt128", SimplicityName: "lt_128", ParamTypes: []string{"u128", "u128"}, ReturnType: "bool"}
+	r.jets["Eq128"] = JetInfo{GoName: "Eq128", SimplicityName: "eq_128", ParamTypes: []string{"u128", "u128"}, ReturnType: "bool"}
+
 	// Output amount jets — read asset and value of a specific output by index
 	r.jets["OutputAsset"] = JetInfo{GoName: "OutputAsset", SimplicityName: "output_asset", ParamTypes: []string{"u32"}, ReturnType: "u256"}
 	r.jets["OutputAmount"] = JetInfo{GoName: "OutputAmount", SimplicityName: "output_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
