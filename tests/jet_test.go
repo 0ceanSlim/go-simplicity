@@ -498,6 +498,35 @@ func TestPhase8SHA256VariantRegistry(t *testing.T) {
 	}
 }
 
+// TestPhase9TaprootJetRegistry verifies that Taproot-specific introspection jets
+// are registered with correct Simplicity names.
+func TestPhase9TaprootJetRegistry(t *testing.T) {
+	registry := jets.NewRegistry()
+
+	testCases := []struct {
+		goName         string
+		simplicityName string
+	}{
+		{"InternalKey", "internal_key"},
+		{"TapleafVersion", "tapleaf_version"},
+		{"Tappath", "tappath"},
+		{"ScriptCmr", "script_cmr"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.goName, func(t *testing.T) {
+			info, found := registry.Lookup(tc.goName)
+			if !found {
+				t.Errorf("Taproot jet %s should be registered", tc.goName)
+				return
+			}
+			if info.SimplicityName != tc.simplicityName {
+				t.Errorf("%s: expected SimplicityName %q, got %q", tc.goName, tc.simplicityName, info.SimplicityName)
+			}
+		})
+	}
+}
+
 // TestSHA256AutoSelect verifies that jet.SHA256Add auto-selects the correct variant
 // based on the argument type at transpile time.
 func TestSHA256AutoSelect(t *testing.T) {

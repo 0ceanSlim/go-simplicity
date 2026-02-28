@@ -2,9 +2,9 @@
 
 A Go to SimplicityHL transpiler that converts Go smart contract logic into Simplicity bytecode for Bitcoin and Elements sidechains.
 
-## Project Status: Phase 8 Complete
+## Project Status: Phase 9 Complete
 
-**Working contract types:** P2PK, HTLC, Atomic Swap, Covenant, 2-of-3 Multisig, arithmetic/comparison contracts, helper-function contracts with switch dispatch, double-SHA256 hashing.
+**Working contract types:** P2PK, HTLC, Atomic Swap, Covenant, 2-of-3 Multisig, arithmetic/comparison contracts, helper-function contracts with switch dispatch, double-SHA256 hashing, vault (hot/cold key), oracle-gated spend, relative timelock (CSV), Taproot key-spend introspection.
 
 See [ROADMAP.md](ROADMAP.md) for the full development plan.
 
@@ -49,6 +49,10 @@ go build -o build/simgo cmd/simgo/main.go
 ./build/simgo -input examples/multisig.go
 ./build/simgo -input examples/htlc_helper.go
 ./build/simgo -input examples/double_sha256.go
+./build/simgo -input examples/vault.go
+./build/simgo -input examples/oracle_price.go
+./build/simgo -input examples/relative_timelock.go
+./build/simgo -input examples/taproot_key_spend.go
 
 go test ./...
 ```
@@ -307,6 +311,134 @@ Both `jet.SHA256Add` calls resolve to `sha_256_ctx_8_add_32` — the first becau
 
 ---
 
+### Vault — Hot/Cold Key Spending (Phase 9)
+
+Two-arm vault: immediate hot-key spend or timelocked cold-key recovery with output script enforcement. Full source: `examples/vault.go`.
+
+```go
+func main() {
+    var w VaultWitness
+    if w.IsLeft {
+        msg := jet.SigAllHash()
+        jet.BIP340Verify(HotKeyPubkey, msg, w.HotKeySig)
+    } else {
+        jet.CheckLockHeight(ColdKeyUnlock)
+        scriptHash := jet.OutputScriptHash(VaultOutputIndex)
+        jet.Eq256(scriptHash, VaultScript)
+        msg := jet.SigAllHash()
+        jet.BIP340Verify(ColdKeyPubkey, msg, w.ColdKeySig)
+    }
+}
+```
+
+**Generated SimplicityHL (Right arm):**
+
+```rust
+Right(sig) => {
+    jet::check_lock_height(param::COLD_KEY_UNLOCK)
+    let script_hash = jet::output_script_hash(param::VAULT_OUTPUT_INDEX);
+    jet::eq_256(script_hash, param::VAULT_SCRIPT)
+    let msg = jet::sig_all_hash();
+    jet::bip_0340_verify((param::COLD_KEY_PUBKEY, msg), sig)
+}
+```
+
+---
+
+### Oracle Price — Trusted Oracle Authorisation (Phase 9)
+
+Two-arm contract: a trusted oracle's BIP-340 signature authorises the spend (Left), or the owner withdraws directly without oracle involvement (Right). Full source: `examples/oracle_price.go`.
+
+```go
+func main() {
+    var w OracleWitness
+    if w.IsLeft {
+        msg := jet.SigAllHash()
+        jet.BIP340Verify(OraclePubkey, msg, w.OracleSig)
+    } else {
+        msg := jet.SigAllHash()
+        jet.BIP340Verify(OwnerPubkey, msg, w.OwnerSig)
+    }
+}
+```
+
+**Generated SimplicityHL:**
+
+```rust
+match witness::W {
+    Left(data) => {
+        let msg = jet::sig_all_hash();
+        jet::bip_0340_verify((param::ORACLE_PUBKEY, msg), data)
+    },
+    Right(sig) => {
+        let msg = jet::sig_all_hash();
+        jet::bip_0340_verify((param::OWNER_PUBKEY, msg), sig)
+    }
+}
+```
+
+---
+
+### Relative Timelock — CSV-Style (Phase 9)
+
+Linear contract enforcing a minimum number of blocks since the funding UTXO was confirmed (`CheckLockDistance`). Full source: `examples/relative_timelock.go`.
+
+```go
+const RelativeLockBlocks uint16 = 10
+
+func main() {
+    var sig [64]byte
+    jet.CheckLockDistance(RelativeLockBlocks)
+    msg := jet.SigAllHash()
+    jet.BIP340Verify(SenderPubkey, msg, sig)
+}
+```
+
+**Generated SimplicityHL:**
+
+```rust
+fn main() {
+    jet::check_lock_distance(param::RELATIVE_LOCK_BLOCKS)
+    let msg = jet::sig_all_hash();
+    jet::bip_0340_verify((param::SENDER_PUBKEY, msg), witness::SIG)
+}
+```
+
+---
+
+### Taproot Key Spend — Internal Key + Tapleaf Introspection (Phase 9)
+
+Linear contract verifying the Taproot internal key and tapleaf version match expected constants before authorising via BIP-340. Full source: `examples/taproot_key_spend.go`.
+
+```go
+const ExpectedTapleafVersion uint8 = 0xc0
+
+func main() {
+    var sig [64]byte
+    key := jet.InternalKey()
+    jet.Eq256(key, ExpectedInternalKey)
+    version := jet.TapleafVersion()
+    jet.Eq8(version, ExpectedTapleafVersion)
+    msg := jet.SigAllHash()
+    jet.BIP340Verify(OwnerPubkey, msg, sig)
+}
+```
+
+**Generated SimplicityHL:**
+
+```rust
+fn main() {
+    let key = jet::internal_key();
+    jet::eq_256(key, param::EXPECTED_INTERNAL_KEY)
+    let version = jet::tapleaf_version();
+    jet::eq_8(version, param::EXPECTED_TAPLEAF_VERSION)
+    let msg = jet::sig_all_hash();
+    jet::bip_0340_verify((param::OWNER_PUBKEY, msg), witness::SIG)
+}
+```
+
+---
+
 ### Multisig — 2-of-3
 
 ```go
@@ -544,8 +676,8 @@ pkg/
 │   ├── types.go
 │   └── either.go
 └── testkeys/       # BIP-340 spec test vectors
-examples/           # Contract examples (10 files + 4 testable)
-tests/              # 55 tests across all phases
+examples/           # Contract examples (14 files + 4 testable)
+tests/              # 60 tests across all phases
 ```
 
 ---
@@ -557,7 +689,7 @@ tests/              # 55 tests across all phases
 - Interfaces
 - Recursive function calls
 - `if/else` inside helper functions (deferred)
-- 3+ spending paths / nested Either (Phase 9)
+- 3+ spending paths / nested Either (Phase 10)
 - String types
 - Imports other than `simplicity/jet`
 

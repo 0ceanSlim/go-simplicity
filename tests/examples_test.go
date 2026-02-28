@@ -377,6 +377,132 @@ func TestExampleMultisig(t *testing.T) {
 	}
 }
 
+// TestExampleVault verifies the vault contract compiles to correct SimplicityHL.
+// Demonstrates 2-arm Either with CheckLockHeight + OutputScriptHash in the cold-key arm.
+func TestExampleVault(t *testing.T) {
+	out := compileExample(t, "../examples/vault.go")
+	assertNoInvalidWitness(t, "vault", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"Either witness type", "Either<[u8; 64], [u8; 64]>"},
+		{"match expression", "match witness::W {"},
+		{"Left arm", "Left(data)"},
+		{"Right arm", "Right(sig)"},
+		{"check_lock_height in Right arm", "jet::check_lock_height(param::COLD_KEY_UNLOCK)"},
+		{"output_script_hash in Right arm", "jet::output_script_hash("},
+		{"eq_256 in Right arm", "jet::eq_256("},
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("vault: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// bip_0340_verify must appear in both arms — check count >= 2
+	count := strings.Count(out, "jet::bip_0340_verify(")
+	if count < 2 {
+		t.Errorf("vault: expected jet::bip_0340_verify in both arms, found %d occurrence(s)", count)
+	}
+
+	// Bound variables must be used — raw field access must NOT appear in arm bodies
+	if strings.Contains(out, "witness::W.hot_key_sig") {
+		t.Error("vault: Left arm should use bound variable, not 'witness::W.hot_key_sig'")
+	}
+	if strings.Contains(out, "witness::W.cold_key_sig") {
+		t.Error("vault: Right arm should use bound 'sig', not 'witness::W.cold_key_sig'")
+	}
+}
+
+// TestExampleOraclePrice verifies the oracle price contract compiles to correct SimplicityHL.
+// Demonstrates 2-arm Either where both arms use BIP-340 verify with different pubkeys.
+func TestExampleOraclePrice(t *testing.T) {
+	out := compileExample(t, "../examples/oracle_price.go")
+	assertNoInvalidWitness(t, "oracle_price", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"Either witness type", "Either<[u8; 64], [u8; 64]>"},
+		{"match expression", "match witness::W {"},
+		{"Left arm", "Left(data)"},
+		{"Right arm", "Right(sig)"},
+		{"oracle pubkey verify in Left arm", "jet::bip_0340_verify((param::ORACLE_PUBKEY, msg), data)"},
+		{"owner pubkey verify in Right arm", "jet::bip_0340_verify((param::OWNER_PUBKEY, msg), sig)"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("oracle_price: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// Bound variables must be used — raw field access must NOT appear in arm bodies
+	if strings.Contains(out, "witness::W.oracle_sig") {
+		t.Error("oracle_price: Left arm should use bound variable, not 'witness::W.oracle_sig'")
+	}
+	if strings.Contains(out, "witness::W.owner_sig") {
+		t.Error("oracle_price: Right arm should use bound 'sig', not 'witness::W.owner_sig'")
+	}
+}
+
+// TestExampleRelativeTimelock verifies the relative timelock example compiles to correct SimplicityHL.
+// Demonstrates linear CheckLockDistance usage for CSV-style relative timelocks.
+func TestExampleRelativeTimelock(t *testing.T) {
+	out := compileExample(t, "../examples/relative_timelock.go")
+	assertNoInvalidWitness(t, "relative_timelock", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"sig witness type", "const SIG: [u8; 64]"},
+		{"check_lock_distance jet", "jet::check_lock_distance(param::RELATIVE_LOCK_BLOCKS)"},
+		{"sig_all_hash jet", "jet::sig_all_hash()"},
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+		{"sender pubkey param", "SENDER_PUBKEY: u256"},
+		{"relative lock blocks param", "RELATIVE_LOCK_BLOCKS: u16"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("relative_timelock: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+}
+
+// TestExampleTaprootKeySpend verifies the taproot key spend example compiles to correct SimplicityHL.
+// Demonstrates InternalKey + TapleafVersion introspection before signature verification.
+func TestExampleTaprootKeySpend(t *testing.T) {
+	out := compileExample(t, "../examples/taproot_key_spend.go")
+	assertNoInvalidWitness(t, "taproot_key_spend", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"sig witness type", "const SIG: [u8; 64]"},
+		{"internal_key jet", "jet::internal_key()"},
+		{"eq_256 for key check", "jet::eq_256(key, param::EXPECTED_INTERNAL_KEY)"},
+		{"tapleaf_version jet", "jet::tapleaf_version()"},
+		{"eq_8 for version check", "jet::eq_8(version, param::EXPECTED_TAPLEAF_VERSION)"},
+		{"bip_0340_verify jet", "jet::bip_0340_verify("},
+		{"expected internal key param", "EXPECTED_INTERNAL_KEY: u256"},
+		{"expected tapleaf version param", "EXPECTED_TAPLEAF_VERSION: u8"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("taproot_key_spend: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+}
+
 // TestExampleDoubleSHA256 verifies the double-SHA256 example compiles to correct SimplicityHL,
 // including SHA256Add auto-select resolving to sha_256_ctx_8_add_32.
 func TestExampleDoubleSHA256(t *testing.T) {
