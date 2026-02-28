@@ -233,10 +233,12 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 									return fmt.Errorf("unknown jet function: jet.%s", jetName)
 								}
 
-								// Evaluate arguments
+								// Evaluate arguments using evaluateJetArg so that
+								// inline binary expressions (e.g. a + b as a jet arg)
+								// are handled correctly via binaryExprToJetCall.
 								var argStrs []string
 								for _, arg := range callExpr.Args {
-									argStr, err := t.evaluateExpression(arg)
+									argStr, err := t.evaluateJetArg(arg)
 									if err != nil {
 										return err
 									}
@@ -1174,7 +1176,14 @@ func (t *Transpiler) inferExprType(expr ast.Expr) string {
 		}
 		for _, jc := range t.jetCalls {
 			if jc.VarName == t.toSnakeCase(e.Name) {
-				return jc.ReturnType
+				// If the return type is a carry-tuple like "(bool, u64)", extract
+				// the actual numeric type — callers of inferExprType (e.g.
+				// inferOperandTypeWidth) only care about the unwrapped value type.
+				rt := jc.ReturnType
+				if strings.HasPrefix(rt, "(bool, ") && strings.HasSuffix(rt, ")") {
+					rt = rt[7 : len(rt)-1]
+				}
+				return rt
 			}
 		}
 	case *ast.BasicLit:
@@ -1251,6 +1260,8 @@ func (t *Transpiler) operatorReturnType(op token.Token, width string) string {
 			return "u32"
 		case "u64":
 			return "u128"
+		case "u128":
+			return "u256"
 		default:
 			return "u64" // multiply_32 → u64
 		}

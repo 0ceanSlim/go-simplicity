@@ -618,6 +618,187 @@ func main() {
 	}
 }
 
+// TestV12Add128Subtract128Registry verifies that v1.2 Add128 and Subtract128 jets
+// are registered with correct Simplicity names and carry-tuple return types.
+func TestV12Add128Subtract128Registry(t *testing.T) {
+	registry := jets.NewRegistry()
+
+	testCases := []struct {
+		goName         string
+		simplicityName string
+		returnType     string
+	}{
+		{"Add128", "add_128", "(bool, u128)"},
+		{"Subtract128", "subtract_128", "(bool, u128)"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.goName, func(t *testing.T) {
+			info, found := registry.Lookup(tc.goName)
+			if !found {
+				t.Errorf("v1.2 jet %s should be registered", tc.goName)
+				return
+			}
+			if info.SimplicityName != tc.simplicityName {
+				t.Errorf("%s: expected SimplicityName %q, got %q", tc.goName, tc.simplicityName, info.SimplicityName)
+			}
+			if info.ReturnType != tc.returnType {
+				t.Errorf("%s: expected ReturnType %q, got %q", tc.goName, tc.returnType, info.ReturnType)
+			}
+		})
+	}
+}
+
+// TestV12Le128Registry verifies Le128, Lt128, and Eq128 are registered correctly.
+func TestV12Le128Registry(t *testing.T) {
+	registry := jets.NewRegistry()
+
+	testCases := []struct {
+		goName         string
+		simplicityName string
+	}{
+		{"Le128", "le_128"},
+		{"Lt128", "lt_128"},
+		{"Eq128", "eq_128"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.goName, func(t *testing.T) {
+			info, found := registry.Lookup(tc.goName)
+			if !found {
+				t.Errorf("jet %s should be registered", tc.goName)
+				return
+			}
+			if info.SimplicityName != tc.simplicityName {
+				t.Errorf("%s: expected SimplicityName %q, got %q", tc.goName, tc.simplicityName, info.SimplicityName)
+			}
+			if info.ReturnType != "bool" {
+				t.Errorf("%s: expected ReturnType %q, got %q", tc.goName, "bool", info.ReturnType)
+			}
+		})
+	}
+}
+
+// TestV12Add128JetCallGeneration verifies Add128 compiles to the correct SimplicityHL binding.
+// The carry bit must be discarded with the (_, varName) destructuring pattern.
+func TestV12Add128JetCallGeneration(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	sum := jet.Add128(1, 2)
+	_ = sum
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if !strings.Contains(out, "jet::add_128") {
+		t.Errorf("expected jet::add_128 in output, got:\n%s", out)
+	}
+	// Carry bit must be discarded via tuple destructuring
+	if !strings.Contains(out, "(_, sum)") {
+		t.Errorf("expected carry-discard pattern '(_, sum)' in output, got:\n%s", out)
+	}
+}
+
+// TestV12AMMInvariantCompilation verifies the full AMM invariant pattern compiles correctly.
+// This exercises: multiply_64 (→u128), le_128, eq_256, output_amount, output_asset,
+// current_amount, input_amount, output_script_hash, current_script_hash.
+// It also tests Bug B1 fix: add/subtract results used as subsequent multiply inputs
+// must produce multiply_64, not multiply_32.
+func TestV12AMMInvariantCompilation(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+const Asset0 = 0x25b251070e29ca19043cf33ccd7324e2ddab03ecc4ae0b5e77c4fc0e5cf6c95a
+const Asset1 = 0xce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2
+
+const PoolInputB uint32 = 1
+const PoolOutputA uint32 = 0
+const PoolOutputB uint32 = 1
+
+func main() {
+	reserve0 := jet.CurrentAmount()
+	reserve1 := jet.InputAmount(PoolInputB)
+	newReserve0 := jet.OutputAmount(PoolOutputA)
+	newReserve1 := jet.OutputAmount(PoolOutputB)
+	asset0Out := jet.OutputAsset(PoolOutputA)
+	asset1Out := jet.OutputAsset(PoolOutputB)
+	jet.Verify(asset0Out == Asset0)
+	jet.Verify(asset1Out == Asset1)
+	kOld := jet.Multiply64(reserve0, reserve1)
+	kNew := jet.Multiply64(newReserve0, newReserve1)
+	jet.Verify(jet.Le128(kOld, kNew))
+	newScriptA := jet.OutputScriptHash(PoolOutputA)
+	myScript := jet.CurrentScriptHash()
+	jet.Verify(newScriptA == myScript)
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("AMM pool contract compile failed: %v", err)
+	}
+
+	checks := []struct {
+		name     string
+		contains string
+	}{
+		{"current_amount", "jet::current_amount"},
+		{"input_amount", "jet::input_amount"},
+		{"output_amount", "jet::output_amount"},
+		{"output_asset", "jet::output_asset"},
+		{"eq_256 for asset check", "jet::eq_256"},
+		{"multiply_64 for kOld", "jet::multiply_64"},
+		{"le_128 for invariant", "jet::le_128"},
+		{"output_script_hash", "jet::output_script_hash"},
+		{"current_script_hash", "jet::current_script_hash"},
+		{"verify", "jet::verify"},
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(out, check.contains) {
+			t.Errorf("AMM output missing %s (%q):\n%s", check.name, check.contains, out)
+		}
+	}
+}
+
+// TestV12CarryTupleUnwrapBugB1 verifies that a variable produced by add_64/subtract_64
+// (which returns "(bool, u64)") can be used as an argument to multiply_64 without
+// silently emitting multiply_32.  This tests the Bug B1 fix in inferExprType.
+func TestV12CarryTupleUnwrapBugB1(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	a := jet.Add64(10, 20)
+	b := jet.Add64(30, 40)
+	product := jet.Multiply64(a, b)
+	_ = product
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if strings.Contains(out, "jet::multiply_32") {
+		t.Errorf("Bug B1 regression: got multiply_32 instead of multiply_64 for u64 operands:\n%s", out)
+	}
+	if !strings.Contains(out, "jet::multiply_64") {
+		t.Errorf("expected jet::multiply_64 for u64 operands, got:\n%s", out)
+	}
+}
+
 // TestSHA256AutoSelect verifies that jet.SHA256Add auto-selects the correct variant
 // based on the argument type at transpile time.
 func TestSHA256AutoSelect(t *testing.T) {

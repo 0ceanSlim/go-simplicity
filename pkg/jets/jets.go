@@ -260,6 +260,14 @@ func (r *JetRegistry) registerBuiltinJets() {
 	// -------------------------------------------------------------------------
 
 	// -------------------------------------------------------------------------
+	// 128-bit arithmetic jets
+	// add_128 / subtract_128 return a (carry/borrow, u128) pair, matching the
+	// same pattern as add_64 / subtract_64.
+	// -------------------------------------------------------------------------
+	r.jets["Add128"] = JetInfo{GoName: "Add128", SimplicityName: "add_128", ParamTypes: []string{"u128", "u128"}, ReturnType: "(bool, u128)"}
+	r.jets["Subtract128"] = JetInfo{GoName: "Subtract128", SimplicityName: "subtract_128", ParamTypes: []string{"u128", "u128"}, ReturnType: "(bool, u128)"}
+
+	// -------------------------------------------------------------------------
 	// 128-bit comparison jets
 	// Needed for AMM invariant checks: multiply_64 returns u128, and we must
 	// compare two u128 products to verify k_new >= k_old.
