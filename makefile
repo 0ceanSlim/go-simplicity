@@ -1,6 +1,6 @@
 # go-simplicity Makefile
 
-.PHONY: build test clean install examples fmt lint help build-src
+.PHONY: build test clean install examples examples-debug fmt lint help build-src test-coverage bench deps mod-check release dev-setup ci
 
 # Build variables
 BINARY_NAME=simgo
@@ -12,7 +12,6 @@ GOCMD=go
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
-GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 GOFMT=gofmt
 
@@ -21,43 +20,44 @@ ifeq ($(OS),Windows_NT)
     BINARY_EXT=.exe
     MKDIR_CMD=if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
     RM_CMD=if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)
-    RM_FILE_CMD=if exist
 else
     BINARY_EXT=
     MKDIR_CMD=mkdir -p $(BUILD_DIR)
     RM_CMD=rm -rf $(BUILD_DIR)
-    RM_FILE_CMD=rm -f
 endif
 
+BINARY=$(BUILD_DIR)/$(BINARY_NAME)$(BINARY_EXT)
+
 # Default target
-all: fmt lint test build
+all: fmt test build
 
 # Build the compiler binary
 build:
-	@echo "Building $(BINARY_NAME)$(BINARY_EXT)..."
+	@echo "Building $(BINARY_NAME)..."
 	@$(MKDIR_CMD)
-	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY_NAME)$(BINARY_EXT) $(CMD_DIR)/main.go
+	$(GOBUILD) -o $(BINARY) $(CMD_DIR)/main.go
 
-# Build only source code (excludes examples)
+# Build only source packages (excludes examples with //go:build ignore)
 build-src:
 	@echo "Building source packages..."
 	$(GOBUILD) ./cmd/... ./pkg/...
 
 # Install the binary to GOPATH/bin
 install:
-	@echo "Installing $(BINARY_NAME)$(BINARY_EXT)..."
+	@echo "Installing $(BINARY_NAME)..."
 	$(GOBUILD) -o $(GOPATH)/bin/$(BINARY_NAME)$(BINARY_EXT) $(CMD_DIR)/main.go
 
-# Run tests (exclude examples)
+# Run tests
 test:
 	@echo "Running tests..."
 	$(GOTEST) -v ./pkg/... ./tests/...
 
-# Run tests with coverage
+# Run tests with coverage report
 test-coverage:
 	@echo "Running tests with coverage..."
 	$(GOTEST) -coverprofile=coverage.out ./pkg/... ./tests/...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report: coverage.html"
 
 # Run benchmarks
 bench:
@@ -69,10 +69,18 @@ fmt:
 	@echo "Formatting Go code..."
 	$(GOFMT) -s -w .
 
-# Run linter (requires golangci-lint)
+# Check formatting without modifying files
+fmt-check:
+	@echo "Checking formatting..."
+	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
+		echo "Unformatted files:"; gofmt -s -l .; exit 1; \
+	fi
+	@echo "All files formatted correctly."
+
+# Run linter (requires golangci-lint — install via https://golangci-lint.run/usage/install/)
 lint:
 	@echo "Running linter..."
-	@where golangci-lint >nul 2>&1 && golangci-lint run || echo "golangci-lint not found. Install from: https://golangci-lint.run/usage/install/"
+	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || echo "golangci-lint not found — install from: https://golangci-lint.run/usage/install/"
 
 # Clean build artifacts
 clean:
@@ -87,101 +95,110 @@ else
 	@rm -f coverage.out coverage.html
 endif
 
-# Download dependencies
+# Download and tidy dependencies
 deps:
 	@echo "Downloading dependencies..."
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-# Compile examples using the transpiler
+# Compile all example contracts using the transpiler
 examples: build
 	@echo "Compiling examples..."
 	@$(MKDIR_CMD)
 ifeq ($(OS),Windows_NT)
 	@if not exist $(BUILD_DIR)\examples mkdir $(BUILD_DIR)\examples
-	$(BUILD_DIR)\$(BINARY_NAME)$(BINARY_EXT) -input examples/basic_swap.go -output $(BUILD_DIR)/examples/basic_swap.simf
-	$(BUILD_DIR)\$(BINARY_NAME)$(BINARY_EXT) -input examples/atomic_swap.go -output $(BUILD_DIR)/examples/atomic_swap.simf
+	$(BINARY) -input examples/p2pk.go             -output $(BUILD_DIR)/examples/p2pk.shl
+	$(BINARY) -input examples/htlc.go             -output $(BUILD_DIR)/examples/htlc.shl
+	$(BINARY) -input examples/atomic_swap.go      -output $(BUILD_DIR)/examples/atomic_swap.shl
+	$(BINARY) -input examples/covenant.go         -output $(BUILD_DIR)/examples/covenant.shl
+	$(BINARY) -input examples/multisig.go         -output $(BUILD_DIR)/examples/multisig.shl
+	$(BINARY) -input examples/htlc_helper.go      -output $(BUILD_DIR)/examples/htlc_helper.shl
+	$(BINARY) -input examples/double_sha256.go    -output $(BUILD_DIR)/examples/double_sha256.shl
+	$(BINARY) -input examples/amount_check.go     -output $(BUILD_DIR)/examples/amount_check.shl
+	$(BINARY) -input examples/basic_swap.go       -output $(BUILD_DIR)/examples/basic_swap.shl
+	$(BINARY) -input examples/simple_payment.go   -output $(BUILD_DIR)/examples/simple_payment.shl
+	$(BINARY) -input examples/simple_logic.go     -output $(BUILD_DIR)/examples/simple_logic.shl
+	$(BINARY) -input examples/simple_multisig.go  -output $(BUILD_DIR)/examples/simple_multisig.shl
+	$(BINARY) -input examples/vault.go            -output $(BUILD_DIR)/examples/vault.shl
+	$(BINARY) -input examples/oracle_price.go     -output $(BUILD_DIR)/examples/oracle_price.shl
+	$(BINARY) -input examples/relative_timelock.go -output $(BUILD_DIR)/examples/relative_timelock.shl
+	$(BINARY) -input examples/taproot_key_spend.go -output $(BUILD_DIR)/examples/taproot_key_spend.shl
 else
 	@mkdir -p $(BUILD_DIR)/examples
-	./$(BUILD_DIR)/$(BINARY_NAME) -input examples/basic_swap.go -output $(BUILD_DIR)/examples/basic_swap.simf
-	./$(BUILD_DIR)/$(BINARY_NAME) -input examples/atomic_swap.go -output $(BUILD_DIR)/examples/atomic_swap.simf
+	$(BINARY) -input examples/p2pk.go             -output $(BUILD_DIR)/examples/p2pk.shl
+	$(BINARY) -input examples/htlc.go             -output $(BUILD_DIR)/examples/htlc.shl
+	$(BINARY) -input examples/atomic_swap.go      -output $(BUILD_DIR)/examples/atomic_swap.shl
+	$(BINARY) -input examples/covenant.go         -output $(BUILD_DIR)/examples/covenant.shl
+	$(BINARY) -input examples/multisig.go         -output $(BUILD_DIR)/examples/multisig.shl
+	$(BINARY) -input examples/htlc_helper.go      -output $(BUILD_DIR)/examples/htlc_helper.shl
+	$(BINARY) -input examples/double_sha256.go    -output $(BUILD_DIR)/examples/double_sha256.shl
+	$(BINARY) -input examples/amount_check.go     -output $(BUILD_DIR)/examples/amount_check.shl
+	$(BINARY) -input examples/basic_swap.go       -output $(BUILD_DIR)/examples/basic_swap.shl
+	$(BINARY) -input examples/simple_payment.go   -output $(BUILD_DIR)/examples/simple_payment.shl
+	$(BINARY) -input examples/simple_logic.go     -output $(BUILD_DIR)/examples/simple_logic.shl
+	$(BINARY) -input examples/simple_multisig.go  -output $(BUILD_DIR)/examples/simple_multisig.shl
+	$(BINARY) -input examples/vault.go            -output $(BUILD_DIR)/examples/vault.shl
+	$(BINARY) -input examples/oracle_price.go     -output $(BUILD_DIR)/examples/oracle_price.shl
+	$(BINARY) -input examples/relative_timelock.go -output $(BUILD_DIR)/examples/relative_timelock.shl
+	$(BINARY) -input examples/taproot_key_spend.go -output $(BUILD_DIR)/examples/taproot_key_spend.shl
 endif
 	@echo "Examples compiled to $(BUILD_DIR)/examples/"
 
-# Run examples with debug output
+# Compile examples with debug output
 examples-debug: build
 	@echo "Compiling examples with debug output..."
-	@$(MKDIR_CMD)
-ifeq ($(OS),Windows_NT)
-	@if not exist $(BUILD_DIR)\examples mkdir $(BUILD_DIR)\examples
-	$(BUILD_DIR)\$(BINARY_NAME)$(BINARY_EXT) -debug -input examples/basic_swap.go -output $(BUILD_DIR)/examples/basic_swap_debug.simf
-	$(BUILD_DIR)\$(BINARY_NAME)$(BINARY_EXT) -debug -input examples/atomic_swap.go -output $(BUILD_DIR)/examples/atomic_swap_debug.simf
-else
-	@mkdir -p $(BUILD_DIR)/examples
-	./$(BUILD_DIR)/$(BINARY_NAME) -debug -input examples/basic_swap.go -output $(BUILD_DIR)/examples/basic_swap_debug.simf
-	./$(BUILD_DIR)/$(BINARY_NAME) -debug -input examples/atomic_swap.go -output $(BUILD_DIR)/examples/atomic_swap_debug.simf
-endif
+	$(BINARY) -debug -input examples/p2pk.go
+	$(BINARY) -debug -input examples/htlc.go
+	$(BINARY) -debug -input examples/vault.go
+	$(BINARY) -debug -input examples/relative_timelock.go
+	$(BINARY) -debug -input examples/taproot_key_spend.go
 
-# Check for security vulnerabilities
-security:
-	@echo "Checking for security vulnerabilities..."
-	@where gosec >nul 2>&1 && gosec ./... || echo "gosec not found. Install with: go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest"
-
-# Generate documentation
-docs:
-	@echo "Generating documentation..."
-	$(GOCMD) doc -all > docs/API.md
-
-# Check Go modules
+# Verify Go modules
 mod-check:
 	@echo "Checking Go modules..."
 	$(GOMOD) verify
 	$(GOMOD) tidy
 
-# Release build (optimized, cross-platform)
-release: fmt lint test
-	@echo "Building release version..."
-	@$(MKDIR_CMD)
-ifeq ($(OS),Windows_NT)
-	@if not exist $(BUILD_DIR)\release mkdir $(BUILD_DIR)\release
-else
+# Cross-platform release builds (optimized, stripped)
+release: fmt test
+	@echo "Building release binaries..."
 	@mkdir -p $(BUILD_DIR)/release
-endif
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-linux-amd64 $(CMD_DIR)/main.go
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-amd64 $(CMD_DIR)/main.go
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-arm64 $(CMD_DIR)/main.go
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-linux-amd64   $(CMD_DIR)/main.go
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-linux-arm64   $(CMD_DIR)/main.go
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-amd64  $(CMD_DIR)/main.go
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-arm64  $(CMD_DIR)/main.go
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BUILD_DIR)/release/$(BINARY_NAME)-windows-amd64.exe $(CMD_DIR)/main.go
+	@echo "Release binaries in $(BUILD_DIR)/release/"
 
-# Development setup
+# Development setup — installs optional tooling
 dev-setup:
 	@echo "Setting up development environment..."
 	$(GOMOD) download
-	@echo "Installing development tools..."
+	@echo "Installing golangci-lint..."
 	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	$(GOCMD) install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
 
-# Continuous integration target
-ci: fmt lint test mod-check security
+# Continuous integration checks (fmt + test + mod-check)
+ci: fmt-check test mod-check
 
-# Help target
+# Help
 help:
-	@echo "Available targets:"
-	@echo "  build         - Build the compiler binary (auto-detects OS)"
-	@echo "  build-src     - Build source packages only"
-	@echo "  install       - Install binary to GOPATH/bin"
-	@echo "  test          - Run tests"
-	@echo "  test-coverage - Run tests with coverage report"
-	@echo "  bench         - Run benchmarks"
-	@echo "  fmt           - Format Go code"
-	@echo "  lint          - Run linter"
-	@echo "  clean         - Clean build artifacts"
-	@echo "  deps          - Download dependencies"
-	@echo "  examples      - Compile example contracts"
-	@echo "  examples-debug- Compile examples with debug output"
-	@echo "  security      - Check for security vulnerabilities"
-	@echo "  docs          - Generate documentation"
-	@echo "  mod-check     - Check Go modules"
-	@echo "  release       - Build optimized release binaries"
-	@echo "  dev-setup     - Set up development environment"
-	@echo "  ci            - Run continuous integration checks"
-	@echo "  help          - Show this help message"
+	@echo "go-simplicity — available make targets:"
+	@echo ""
+	@echo "  build          Build the simgo binary to build/"
+	@echo "  build-src      Build source packages only"
+	@echo "  install        Install simgo to GOPATH/bin"
+	@echo "  test           Run all tests"
+	@echo "  test-coverage  Run tests and generate coverage.html"
+	@echo "  bench          Run benchmarks"
+	@echo "  fmt            Format all Go source files"
+	@echo "  fmt-check      Check formatting without modifying files"
+	@echo "  lint           Run golangci-lint (if installed)"
+	@echo "  clean          Remove build artifacts and coverage files"
+	@echo "  deps           Download and tidy Go modules"
+	@echo "  examples       Build binary and compile all example contracts"
+	@echo "  examples-debug Run selected examples with -debug flag"
+	@echo "  mod-check      Verify and tidy Go modules"
+	@echo "  release        Cross-compile release binaries (linux/darwin/windows)"
+	@echo "  dev-setup      Install development tools (golangci-lint)"
+	@echo "  ci             Run format check + tests + module verification"
+	@echo "  help           Show this message"

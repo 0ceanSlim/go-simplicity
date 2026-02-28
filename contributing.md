@@ -1,334 +1,106 @@
 # Contributing to go-simplicity
 
-We welcome contributions to the go-simplicity project! This document provides guidelines for contributing.
-
-## Table of Contents
-
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Process](#development-process)
-- [Coding Standards](#coding-standards)
-- [Testing](#testing)
-- [Documentation](#documentation)
-- [Submitting Changes](#submitting-changes)
-
-## Code of Conduct
-
-This project adheres to a code of conduct that we expect all contributors to follow. Please be respectful and constructive in all interactions.
+Contributions are welcome — bug reports, new contract examples, transpiler improvements, and documentation fixes.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Go 1.20 or later
+- Go 1.22 or later
 - Git
-- Make (optional, but recommended)
+- `make` (optional but recommended)
 
-### Setting up the Development Environment
+### Setup
 
-1. **Fork the repository** on GitHub
-2. **Clone your fork** locally:
-
-   ```bash
-   git clone https://github.com/yourusername/go-simplicity.git
-   cd go-simplicity
-   ```
-
-3. **Set up the development environment**:
-
-   ```bash
-   make dev-setup
-   ```
-
-4. **Verify the setup**:
-   ```bash
-   make test
-   make build
-   ```
+```bash
+git clone https://github.com/0ceanslim/go-simplicity.git
+cd go-simplicity
+make dev-setup   # installs golangci-lint
+make test        # verify everything works
+make build       # build the simgo binary
+```
 
 ### Project Structure
 
 ```
-go-simplicity/
-├── cmd/simgo/          # Main compiler binary
-├── pkg/
-│   ├── compiler/       # Core compilation logic
-│   ├── transpiler/     # Go to SimplicityHL conversion
-│   └── types/          # Type system mapping
-├── examples/           # Example Go contracts
-├── tests/              # Test files
-├── docs/               # Documentation
-└── scripts/            # Build and utility scripts
+cmd/simgo/          # CLI binary
+pkg/
+├── compiler/       # Validation and orchestration
+├── jets/           # Jet registry (91 jets)
+├── transpiler/     # Core Go → SimplicityHL AST walker
+│   ├── transpiler.go
+│   ├── patterns.go
+│   └── arrays.go
+├── types/          # Type mapping
+└── testkeys/       # BIP-340 test vectors
+examples/           # Contract examples (14 files + 4 testable)
+tests/              # Test suite (60 tests)
+docs/               # Extended documentation
 ```
 
-## Development Process
+## Development Workflow
 
-### Branching Strategy
-
-- `main`: Stable, production-ready code
-- `develop`: Integration branch for features
-- `feature/*`: Feature development branches
-- `bugfix/*`: Bug fix branches
-- `hotfix/*`: Critical fixes for production
-
-### Workflow
-
-1. Create a feature branch from `develop`:
+1. Fork the repository and create a branch from `main`
+2. Make your changes and add tests
+3. Run the checks locally:
 
    ```bash
-   git checkout develop
-   git pull origin develop
-   git checkout -b feature/your-feature-name
+   make fmt      # format
+   make test     # tests must pass
+   make build    # binary must build
+   make ci       # full CI check (fmt + tests + mod verify)
    ```
 
-2. Make your changes following our coding standards
-
-3. Write or update tests for your changes
-
-4. Ensure all tests pass:
-
-   ```bash
-   make test
-   make lint
-   ```
-
-5. Commit your changes with a descriptive commit message
-
-6. Push to your fork and create a pull request
+4. Open a pull request
 
 ## Coding Standards
 
-### Go Code Style
+- Follow standard Go formatting — `gofmt -s` must produce no output
+- Match the style of the surrounding code
+- Add tests for new transpiler behaviour — see `tests/` for patterns
+- New jet registrations go in `pkg/jets/jets.go`
+- New contract examples go in `examples/` with a `//go:build ignore` tag
+- New example tests go in `tests/examples_test.go`
 
-- Follow standard Go formatting (`gofmt`)
-- Use meaningful variable and function names
-- Write comprehensive comments for public APIs
-- Keep functions focused and reasonably sized
-- Handle errors explicitly
+## Adding a New Jet
 
-### Code Organization
+1. Register it in `pkg/jets/jets.go`:
 
-- Group related functionality in packages
-- Use interfaces to define contracts
-- Minimize dependencies between packages
-- Follow the principle of least privilege
-
-### Example Code Style
-
-```go
-// MapGoType converts a Go AST type to its Simplicity equivalent.
-// It returns an error if the Go type is not supported in Simplicity.
-func (tm *TypeMapper) MapGoType(goType ast.Expr) (string, error) {
-    switch t := goType.(type) {
-    case *ast.Ident:
-        return tm.mapIdentType(t)
-    case *ast.ArrayType:
-        return tm.mapArrayType(t)
-    default:
-        return "", fmt.Errorf("unsupported Go type: %T", goType)
-    }
-}
-```
-
-### Commit Messages
-
-Follow the conventional commit format:
-
-```
-type(scope): brief description
-
-Longer description if needed
-
-Fixes #123
-```
-
-Types:
-
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or modifying tests
-- `chore`: Build process or auxiliary tool changes
-
-Examples:
-
-- `feat(transpiler): add support for struct types`
-- `fix(parser): handle empty function bodies correctly`
-- `docs(readme): update installation instructions`
-
-## Testing
-
-### Writing Tests
-
-- Write unit tests for all new functionality
-- Use table-driven tests for multiple test cases
-- Include both positive and negative test cases
-- Mock external dependencies
-
-### Test Structure
-
-```go
-func TestFunctionName(t *testing.T) {
-    testCases := []struct {
-        name     string
-        input    string
-        expected string
-        wantErr  bool
-    }{
-        {
-            name:     "valid input",
-            input:    "test input",
-            expected: "expected output",
-            wantErr:  false,
-        },
-        {
-            name:    "invalid input",
-            input:   "bad input",
-            wantErr: true,
-        },
-    }
-
-    for _, tc := range testCases {
-        t.Run(tc.name, func(t *testing.T) {
-            result, err := FunctionUnderTest(tc.input)
-
-            if tc.wantErr {
-                if err == nil {
-                    t.Error("expected error but got none")
-                }
-                return
-            }
-
-            if err != nil {
-                t.Fatalf("unexpected error: %v", err)
-            }
-
-            if result != tc.expected {
-                t.Errorf("expected %q, got %q", tc.expected, result)
-            }
-        })
-    }
-}
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-make test
-
-# Run tests with coverage
-make test-coverage
-
-# Run specific package tests
-go test ./pkg/transpiler/
-
-# Run benchmarks
-make bench
-```
-
-## Documentation
-
-### Code Documentation
-
-- Document all public functions, types, and constants
-- Use complete sentences in comments
-- Include examples for complex functions
-- Document any non-obvious behavior
-
-### User Documentation
-
-- Update README.md for user-facing changes
-- Add examples to the examples/ directory
-- Update API documentation when interfaces change
-
-### Documentation Style
-
-```go
-// TypeMapper maps Go types to their Simplicity equivalents.
-// It maintains a registry of built-in type mappings and provides
-// methods for converting Go AST types to Simplicity type strings.
-type TypeMapper struct {
-    builtinTypes map[string]string
-}
-
-// MapGoType converts a Go AST type expression to its Simplicity equivalent.
-// It returns the Simplicity type as a string, or an error if the Go type
-// is not supported.
-//
-// Example:
-//   mapper := NewTypeMapper()
-//   simplicityType, err := mapper.MapGoType(goASTType)
-//   if err != nil {
-//       return fmt.Errorf("unsupported type: %w", err)
-//   }
-func (tm *TypeMapper) MapGoType(goType ast.Expr) (string, error) {
-    // implementation
-}
-```
-
-## Submitting Changes
-
-### Pull Request Process
-
-1. **Ensure your branch is up to date** with the target branch
-2. **Run all checks** locally:
-   ```bash
-   make ci
+   ```go
+   r.jets["MyJet"] = JetInfo{
+       GoName:         "MyJet",
+       SimplicityName: "my_jet",
+       ParamTypes:     []string{"u32"},
+       ReturnType:     "()",
+   }
    ```
-3. **Create a pull request** with:
-   - Clear title and description
-   - Reference to any related issues
-   - Screenshots for UI changes (if applicable)
-   - Breaking change notes (if applicable)
 
-### Pull Request Template
+2. Add a registry test in `tests/jet_test.go`
+3. Add a usage example in `examples/` if it enables a new contract pattern
+4. Add an end-to-end compile test in `tests/examples_test.go`
 
-When creating a pull request, include:
+## Adding a Contract Example
 
-- **What**: Brief description of the change
-- **Why**: Motivation and context
-- **How**: Technical details of the implementation
-- **Testing**: How the change was tested
-- **Breaking Changes**: Any breaking changes and migration notes
+1. Create `examples/your_contract.go` with `//go:build ignore` as the first line
+2. Add a `TestExampleYourContract` function to `tests/examples_test.go`
+3. Document the pattern in `docs/contract-patterns.md`
+4. Add the example to the `examples` target in the `makefile`
 
-### Review Process
+## Commit Messages
 
-- All PRs require at least one review
-- Address reviewer feedback promptly
-- Keep the PR focused and reasonably sized
-- Rebase and squash commits before merging
+Use conventional commits:
 
-## Additional Guidelines
+```
+feat(transpiler): add support for N-of-M multisig patterns
+fix(jets): correct return type for tapleaf_version
+docs(examples): add vault contract example
+test(jet_test): add Phase 9 taproot jet registry checks
+```
 
-### Performance Considerations
+## Issues and Feature Requests
 
-- Profile code for performance-critical paths
-- Consider memory allocations in hot paths
-- Use benchmarks to validate performance improvements
+Use [GitHub Issues](https://github.com/0ceanslim/go-simplicity/issues) for bug reports and feature requests. Please include:
 
-### Security Considerations
-
-- Validate all inputs, especially from untrusted sources
-- Be careful with file system operations
-- Follow secure coding practices
-
-### Compatibility
-
-- Maintain backward compatibility when possible
-- Document breaking changes clearly
-- Provide migration guides for major changes
-
-## Getting Help
-
-- **Issues**: Use GitHub issues for bug reports and feature requests
-- **Discussions**: Use GitHub discussions for questions and brainstorming
-- **Chat**: Join our community chat (link to be added)
-
-## Recognition
-
-Contributors will be recognized in the project documentation and release notes. We appreciate all forms of contribution, from code to documentation to bug reports!
-
-Thank you for contributing to go-simplicity!
+- Go source that demonstrates the problem
+- Expected SimplicityHL output
+- Actual output or error message
