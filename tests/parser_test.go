@@ -308,6 +308,158 @@ func main() {
 	}
 }
 
+// TestSwitchMatchGeneration verifies that a tagless switch {} with IsLeft conditions
+// generates a SimplicityHL match expression with Left(data) and Right(sig) arms.
+func TestSwitchMatchGeneration(t *testing.T) {
+	source := `
+//go:build ignore
+package main
+
+import "simplicity/jet"
+
+const RecipientPubkey = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0
+const SenderPubkey    = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4
+const MinRefundHeight uint32 = 800000
+
+type SwapWitness struct {
+	IsLeft    bool
+	RecipSig  [64]byte
+	SenderSig [64]byte
+}
+
+func main() {
+	var w SwapWitness
+	switch {
+	case w.IsLeft:
+		msg := jet.SigAllHash()
+		jet.BIP340Verify(RecipientPubkey, msg, w.RecipSig)
+	case !w.IsLeft:
+		jet.CheckLockHeight(MinRefundHeight)
+		msg := jet.SigAllHash()
+		jet.BIP340Verify(SenderPubkey, msg, w.SenderSig)
+	}
+}
+`
+	source = strings.Replace(source, "//go:build ignore\n", "", 1)
+
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compilation failed: %v", err)
+	}
+
+	for _, want := range []string{"match witness::W {", "Left(data)", "Right(sig)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("TestSwitchMatchGeneration: missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}
+
+// TestHelperFunctionBody verifies that a linear helper function body is correctly transpiled —
+// parameter names resolve as bare identifiers and jet calls are emitted with correct names.
+func TestHelperFunctionBody(t *testing.T) {
+	source := `
+//go:build ignore
+package main
+
+import "simplicity/jet"
+
+const HashLock = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+
+func verifyHashlock(preimage [32]byte) {
+	hash := jet.SHA256Finalize(jet.SHA256Add32(jet.SHA256Init(), preimage))
+	jet.Eq256(hash, HashLock)
+}
+
+func main() {
+}
+`
+	source = strings.Replace(source, "//go:build ignore\n", "", 1)
+
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compilation failed: %v", err)
+	}
+
+	for _, want := range []string{
+		"fn verify_hashlock(",
+		"jet::sha_256_ctx_8_finalize(",
+		"jet::sha_256_ctx_8_add_32(",
+		"jet::sha_256_ctx_8_init()",
+		"jet::eq_256(",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("TestHelperFunctionBody: missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}
+
+// TestInlinedHelperCall verifies that when a helper function is called from a switch arm,
+// its body is inlined into the match arm — not just referenced by name.
+func TestInlinedHelperCall(t *testing.T) {
+	source := `
+//go:build ignore
+package main
+
+import "simplicity/jet"
+
+const HashLock = 0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+const RecipientPubkey = 0x9bef8d556d80e43ae7e0becb3f7de6b4e5e4f7e8d9a0b1c2d3e4f5a6b7c8d9e0
+const SenderPubkey    = 0xe37d58a1aae4ba05c9b2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4
+const MinRefundHeight uint32 = 800000
+
+type AtomicSwapWitness struct {
+	IsLeft       bool
+	Preimage     [32]byte
+	RecipientSig [64]byte
+	SenderSig    [64]byte
+}
+
+func verifyHashlock(preimage [32]byte) {
+	hash := jet.SHA256Finalize(jet.SHA256Add32(jet.SHA256Init(), preimage))
+	jet.Eq256(hash, HashLock)
+}
+
+func main() {
+	var w AtomicSwapWitness
+	switch {
+	case w.IsLeft:
+		verifyHashlock(w.Preimage)
+		msg := jet.SigAllHash()
+		jet.BIP340Verify(RecipientPubkey, msg, w.RecipientSig)
+	case !w.IsLeft:
+		jet.CheckLockHeight(MinRefundHeight)
+		msg := jet.SigAllHash()
+		jet.BIP340Verify(SenderPubkey, msg, w.SenderSig)
+	}
+}
+`
+	source = strings.Replace(source, "//go:build ignore\n", "", 1)
+
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	out, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("compilation failed: %v", err)
+	}
+
+	// Inlined jet calls must appear inside the match arm body (Left arm), not just in fn verify_hashlock
+	if !strings.Contains(out, "Left(data)") {
+		t.Errorf("TestInlinedHelperCall: missing Left(data) arm\nfull output:\n%s", out)
+	}
+
+	// Count occurrences of sha_256_ctx_8_finalize — should appear at least twice (fn body + inlined)
+	count := strings.Count(out, "jet::sha_256_ctx_8_finalize(")
+	if count < 2 {
+		t.Errorf("TestInlinedHelperCall: expected >=2 occurrences of sha_256_ctx_8_finalize (fn + inlined), got %d\nfull output:\n%s", count, out)
+	}
+
+	// The inlined calls must use the destructured field name, not witness::W.preimage
+	if strings.Contains(out, "witness::W.preimage") {
+		t.Errorf("TestInlinedHelperCall: inlined helper should use 'preimage' not 'witness::W.preimage'\nfull output:\n%s", out)
+	}
+}
+
 // Helper functions
 func contains(text, substring string) bool {
 	return strings.Contains(text, substring)

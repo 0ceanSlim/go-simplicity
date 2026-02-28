@@ -295,6 +295,48 @@ func TestExampleCovenant(t *testing.T) {
 	}
 }
 
+// TestExampleHTLCHelper verifies the HTLC helper function example compiles to correct SimplicityHL.
+// It exercises both analyzeSwitchAsMatch (switch {} dispatch) and helper function inlining.
+func TestExampleHTLCHelper(t *testing.T) {
+	out := compileExample(t, "../examples/htlc_helper.go")
+	assertNoInvalidWitness(t, "htlc_helper", out)
+
+	checks := []struct {
+		desc    string
+		present string
+	}{
+		{"helper function declaration", "fn verify_hashlock("},
+		{"sha_256_ctx_8_finalize in helper/Left arm", "jet::sha_256_ctx_8_finalize("},
+		{"sha_256_ctx_8_add_32 in helper/Left arm", "jet::sha_256_ctx_8_add_32("},
+		{"sha_256_ctx_8_init in helper/Left arm", "jet::sha_256_ctx_8_init()"},
+		{"eq_256 in helper/Left arm", "jet::eq_256("},
+		{"match expression", "match witness::W {"},
+		{"Left arm", "Left(data)"},
+		{"Right arm", "Right(sig)"},
+		{"destructuring", "let (preimage, recipient_sig):"},
+		{"check_lock_height in Right arm", "jet::check_lock_height(param::MIN_REFUND_HEIGHT)"},
+		{"bip_0340_verify in both arms", "jet::bip_0340_verify("},
+		{"sig_all_hash jet", "jet::sig_all_hash()"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.present) {
+			t.Errorf("htlc_helper: expected %s — missing %q\nfull output:\n%s", c.desc, c.present, out)
+		}
+	}
+
+	// witness::W.field must NOT appear inside match arm bodies (bound vars should be used)
+	if strings.Contains(out, "witness::W.preimage") {
+		t.Error("htlc_helper: Left arm should use 'preimage' not 'witness::W.preimage'")
+	}
+	if strings.Contains(out, "witness::W.recipient_sig") {
+		t.Error("htlc_helper: Left arm should use 'recipient_sig' not 'witness::W.recipient_sig'")
+	}
+	if strings.Contains(out, "witness::W.sender_sig") {
+		t.Error("htlc_helper: Right arm should use 'sig' not 'witness::W.sender_sig'")
+	}
+}
+
 // TestExampleMultisig verifies the 2-of-3 multisig example compiles to correct SimplicityHL.
 func TestExampleMultisig(t *testing.T) {
 	out := compileExample(t, "../examples/multisig.go")

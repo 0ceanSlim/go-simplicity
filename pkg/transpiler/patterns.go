@@ -149,6 +149,7 @@ func (t *Transpiler) analyzeAssignStmt(stmt *ast.AssignStmt) (string, error) {
 // analyzeExprStmt converts expression statements (like jet calls)
 func (t *Transpiler) analyzeExprStmt(stmt *ast.ExprStmt) (string, error) {
 	if callExpr, ok := stmt.X.(*ast.CallExpr); ok {
+		// jet.X(...) selector calls
 		if sel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
 			if selIdent, ok := sel.X.(*ast.Ident); ok && selIdent.Name == "jet" {
 				jetCall, err := t.evaluateJetCall(sel.Sel.Name, callExpr.Args)
@@ -157,6 +158,10 @@ func (t *Transpiler) analyzeExprStmt(stmt *ast.ExprStmt) (string, error) {
 				}
 				return jetCall, nil
 			}
+		}
+		// User-defined function calls (e.g., verifyHashlock(...))
+		if _, ok := callExpr.Fun.(*ast.Ident); ok {
+			return t.evaluateCallExpr(callExpr)
 		}
 	}
 	return "", nil
@@ -196,9 +201,13 @@ func (t *Transpiler) generateMatchExpression(match *MatchExpression, indent stri
 
 		sb.WriteString(fmt.Sprintf("%s    %s => {\n", indent, pattern))
 
-		// Generate body statements
+		// Generate body statements (each entry may span multiple lines)
 		for _, bodyStmt := range mc.BodyStmts {
-			sb.WriteString(fmt.Sprintf("%s        %s\n", indent, bodyStmt))
+			for _, line := range strings.Split(bodyStmt, "\n") {
+				if strings.TrimSpace(line) != "" {
+					sb.WriteString(fmt.Sprintf("%s        %s\n", indent, line))
+				}
+			}
 		}
 
 		sb.WriteString(fmt.Sprintf("%s    }", indent))

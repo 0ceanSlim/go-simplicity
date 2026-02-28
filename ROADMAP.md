@@ -5,7 +5,7 @@
 
 ---
 
-## Gap Analysis (Post Phase 5)
+## Gap Analysis (Post Phase 6)
 
 ### Jet Coverage
 Currently 86 jets registered across all categories:
@@ -17,15 +17,8 @@ Currently 86 jets registered across all categories:
 - **Transaction introspection**: num_inputs/outputs, output_amount, output_script_hash, current_sequence, input_prev_outpoint, version, transaction_id, internal_key, tapleaf_version, tappath, script_cmr, and more — ✓ complete
 
 ### Transpiler Logic
-- `analyzeFunctionBody` is a stub — helper functions are never actually transpiled, always returns `"true"`
-- `evaluateCallExpr` hardcoded: non-jet function calls always return `"true"`
-- `analyzeSwitchAsMatch` is a stub — `switch {}` statements silently ignored
 - Arithmetic/comparison/bitwise operators (`+`, `-`, `*`, `/`, `%`, `<`, `<=`, `==`, `&`, `|`, `^`) **mapped to jet calls** ✓
-- No multi-path Either (3+ spending paths)
-
-### Examples
-- `atomic_swap.go` uses no jets — placeholder only
-- No covenant/script-hash contract example
+- No multi-path Either (3+ spending paths) — deferred to Phase 9
 
 ---
 
@@ -112,30 +105,27 @@ Rewrite `atomic_swap.go` using actual jets:
 
 ---
 
-## Phase 7 — Helper Functions & Advanced Control Flow
+## ✅ Phase 7 — Helper Functions & Switch Dispatch (Complete)
 
-**Goal**: Fix the two biggest transpiler stubs so real multi-function contracts work.
+**Goal**: Fix the three biggest transpiler stubs so real multi-function contracts work.
 
-### 7.1 — Fix `analyzeFunctionBody`
-Currently returns `"true"` for any non-trivial function body. Needs to handle:
-- `if/else` chains → nested match or sequential jet::verify calls
-- Multi-statement bodies with local variable assignments
-- Calls to other user-defined functions (recursion-free inlining)
-- Boolean return via jet results
+### ✅ 7.1 — Fix `analyzeFunctionBody`
+Linear jet-call sequences in helper functions now transpile correctly. Parameter names resolve as bare identifiers and are substituted at call sites. If/else inside helpers deferred to Phase 8.
 
-### 7.2 — Fix `evaluateCallExpr` for User-Defined Functions
-When `main()` calls a helper function, inline its transpiled body rather than returning `"true"`. Track function bodies during analysis, substitute at call sites.
+### ✅ 7.2 — Fix `evaluateCallExpr` for User-Defined Functions
+User-defined helper calls are looked up in `t.functions` and their bodies inlined at call sites using word-boundary parameter substitution.
 
-### 7.3 — Implement `analyzeSwitchAsMatch`
-`switch w.field { case X: ... default: ... }` → SimplicityHL `match` block.
+### ✅ 7.3 — Implement `analyzeSwitchAsMatch`
+`switch { case w.IsLeft: ... case !w.IsLeft: ... }` → SimplicityHL `match witness::W { Left(data) => { ... }, Right(sig) => { ... } }`. Mirrors `analyzeIfAsMatch` using `extractSumTypeCondition` on each case clause.
 
-### 7.4 — Multi-Path Spending (3+ Either arms)
-Support nested `Either<A, Either<B, C>>` for contracts with 3+ spending conditions. Example: 3-path contract with hashlock / timelock / multisig.
+### 7.4 — Multi-Path Spending (3+ Either arms) — Deferred to Phase 9
+Support nested `Either<A, Either<B, C>>` for contracts with 3+ spending conditions.
 
-### 7.5 — Tests
-- Full test suite for helper function transpilation
-- Switch-statement → match expression tests
-- 3-path Either generation test
+### ✅ 7.5 — Tests
+- `TestHelperFunctionBody` — linear helper transpilation
+- `TestSwitchMatchGeneration` — switch → match expression
+- `TestInlinedHelperCall` — helper inlined at switch arm call site
+- `TestExampleHTLCHelper` — end-to-end example with switch + helper inlining
 
 ---
 
@@ -213,7 +203,7 @@ When a `SHA256Add*` call is made, auto-select the correctly-sized variant based 
 |-------|-------|--------|--------|
 | **5** — Arithmetic & Logic Jets | High | Medium | ✅ Complete |
 | **6** — Time Locks + Tx Introspection | High | Medium | ✅ Complete |
-| **7** — Helper Functions / Control Flow | High | High | After 6 |
+| **7** — Helper Functions / Control Flow | High | High | ✅ Complete |
 | **8** — SHA-256 Variants | Medium | Low | Parallel w/ 7 |
 | **9** — Advanced Examples | Medium | Medium | After 7 |
 | **10** — Release Quality | Medium | Medium | Last |

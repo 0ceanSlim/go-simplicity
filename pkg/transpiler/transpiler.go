@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -590,10 +591,64 @@ func (t *Transpiler) getOppositePattern(pattern string) string {
 	}
 }
 
-// analyzeSwitchAsMatch analyzes a switch statement as a pattern match
+// analyzeSwitchAsMatch analyzes a switch statement as a pattern match.
+// Handles tagless switch { case w.IsLeft: ... case !w.IsLeft: ... } patterns.
 func (t *Transpiler) analyzeSwitchAsMatch(switchStmt *ast.SwitchStmt) (*MatchExpression, error) {
-	// For now, return nil - we'll implement this for more complex patterns later
-	return nil, nil
+	if switchStmt.Tag != nil {
+		return nil, nil // tagged switch deferred
+	}
+
+	var match *MatchExpression
+
+	for _, stmt := range switchStmt.Body.List {
+		caseClause, ok := stmt.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if len(caseClause.List) == 0 {
+			continue // skip default:
+		}
+
+		scrutinee, pattern, varBase := t.extractSumTypeCondition(caseClause.List[0])
+		if scrutinee == "" {
+			continue
+		}
+
+		if match == nil {
+			match = &MatchExpression{Scrutinee: scrutinee}
+		}
+
+		mc := MatchCase{Pattern: pattern}
+		if pattern == "Left" {
+			mc.VarName = "data"
+		} else if pattern == "Right" || pattern == "Some" {
+			mc.VarName = "sig"
+		}
+
+		for _, s := range caseClause.Body {
+			stmtStr, err := t.analyzeStatementWithVarBinding(s, varBase, mc.VarName)
+			if err != nil {
+				return nil, err
+			}
+			if stmtStr != "" {
+				mc.BodyStmts = append(mc.BodyStmts, stmtStr)
+			}
+		}
+
+		// multi-field Left arm: prepend destructuring (same as analyzeIfAsMatch)
+		if pattern == "Left" {
+			fieldInfo := t.getEitherFieldInfo(varBase)
+			if fieldInfo != nil && len(fieldInfo.LeftFieldNames) > 1 {
+				names := "(" + strings.Join(fieldInfo.LeftFieldNames, ", ") + ")"
+				destructure := fmt.Sprintf("let %s: %s = data;", names, fieldInfo.LeftType)
+				mc.BodyStmts = append([]string{destructure}, mc.BodyStmts...)
+			}
+		}
+
+		match.Cases = append(match.Cases, mc)
+	}
+
+	return match, nil
 }
 
 // evaluateJetArg evaluates an argument to a jet call, handling various cases
@@ -691,42 +746,25 @@ func (t *Transpiler) analyzeFunction(funcDecl *ast.FuncDecl) error {
 }
 
 func (t *Transpiler) analyzeFunctionBody(block *ast.BlockStmt) (string, error) {
-	// For now, create simple pattern matching based on the logic
-	// This is a simplified approach - a full implementation would need
-	// more sophisticated analysis
-
-	var body strings.Builder
-
-	// Look for simple patterns like return statements
+	// NOTE: t.constants must be populated before this runs.
+	// Place constants before helper functions in source to guarantee ordering.
+	var lines []string
 	for _, stmt := range block.List {
-		if returnStmt, ok := stmt.(*ast.ReturnStmt); ok {
-			if len(returnStmt.Results) == 1 {
-				// Try to create pattern matching from the return logic
-				if binary, ok := returnStmt.Results[0].(*ast.BinaryExpr); ok {
-					// Convert binary expressions to pattern matching
-					left := t.extractIdentifier(binary.X)
-					if left != "" {
-						switch binary.Op {
-						case token.GTR:
-							body.WriteString(fmt.Sprintf("    match %s {\n", t.toSnakeCase(left)))
-							body.WriteString("        0 => false,\n")
-							body.WriteString("        _ => true,\n")
-							body.WriteString("    }")
-							return body.String(), nil
-						}
-					}
-				}
-
-				// Simple boolean or identifier returns
-				if ident, ok := returnStmt.Results[0].(*ast.Ident); ok {
-					return t.toSnakeCase(ident.Name), nil
-				}
-			}
+		if _, ok := stmt.(*ast.IfStmt); ok {
+			return "true", nil // if/else in helpers deferred to Phase 8
+		}
+		stmtStr, err := t.analyzeStatement(stmt)
+		if err != nil {
+			return "", err
+		}
+		if stmtStr != "" {
+			lines = append(lines, stmtStr)
 		}
 	}
-
-	// Default pattern matching
-	return "true", nil
+	if len(lines) == 0 {
+		return "true", nil
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func (t *Transpiler) analyzeConstants(genDecl *ast.GenDecl) error {
@@ -1242,18 +1280,26 @@ func (t *Transpiler) evaluateCallExpr(expr *ast.CallExpr) (string, error) {
 		}
 	}
 
-	// For function calls, we need to evaluate them based on their logic
+	// User-defined function calls: look up in t.functions and inline the body
 	if ident, ok := expr.Fun.(*ast.Ident); ok {
-		funcName := ident.Name
-
-		// For BasicSwap with known arguments, we can evaluate the result
-		if strings.EqualFold(funcName, "basicswap") {
-			// BasicSwap(amountValid, feeValid) returns feeValid if amountValid is true
-			// Since we know amountValid = true and feeValid = true, result is true
-			return "true", nil
+		funcName := t.toSnakeCase(ident.Name)
+		for _, fn := range t.functions {
+			if fn.Name == funcName && len(fn.Parameters) == len(expr.Args) {
+				// Evaluate call-site arguments
+				var argStrs []string
+				for _, arg := range expr.Args {
+					argStr, _ := t.evaluateJetArg(arg)
+					argStrs = append(argStrs, argStr)
+				}
+				// Substitute parameters into the function body using word-boundary replacement
+				body := fn.Body
+				for i, param := range fn.Parameters {
+					re := regexp.MustCompile(`\b` + regexp.QuoteMeta(param.Name) + `\b`)
+					body = re.ReplaceAllString(body, argStrs[i])
+				}
+				return body, nil
+			}
 		}
-
-		// For other function calls, return a reasonable default
 		return "true", nil
 	}
 	return "true", nil
@@ -1351,7 +1397,11 @@ func (t *Transpiler) generateFunction(function Function) {
 	}
 
 	t.writeLine(fmt.Sprintf("fn %s%s {", function.Name, sig))
-	t.writeLine(fmt.Sprintf("    %s", function.Body))
+	for _, line := range strings.Split(function.Body, "\n") {
+		if strings.TrimSpace(line) != "" {
+			t.writeLine(fmt.Sprintf("    %s", line))
+		}
+	}
 	t.writeLine("}")
 	t.writeLine("")
 }
