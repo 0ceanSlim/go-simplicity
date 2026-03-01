@@ -845,3 +845,126 @@ func main() {
 		t.Errorf("32-byte witness: expected sha_256_ctx_8_add_32, got:\n%s", out32)
 	}
 }
+
+func TestBooleanIfElse(t *testing.T) {
+	// Test basic boolean if/else compilation (the mode-detection pattern used in AMM contracts).
+	source := `
+package main
+
+import "simplicity/jet"
+
+const PoolInputB uint32 = 1
+const PoolOutputA uint32 = 0
+const PoolOutputB uint32 = 1
+
+func main() {
+	reserve0 := jet.CurrentAmount()
+	reserve1 := jet.InputAmount(PoolInputB)
+	newReserve0 := jet.OutputAmount(PoolOutputA)
+	newReserve1 := jet.OutputAmount(PoolOutputB)
+
+	isRemoveMode := jet.Lt64(newReserve0, reserve0)
+
+	if isRemoveMode {
+		kOld := jet.Multiply64(reserve0, reserve1)
+		kNew := jet.Multiply64(newReserve0, newReserve1)
+		jet.Verify(jet.Le128(kOld, kNew))
+	} else {
+		kOld := jet.Multiply64(reserve0, reserve1)
+		kNew := jet.Multiply64(newReserve0, newReserve1)
+		jet.Verify(jet.Le128(kOld, kNew))
+	}
+}
+`
+
+	c := compiler.New(compiler.Config{
+		Target: "simplicityhl",
+		Debug:  false,
+	})
+
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Boolean if/else compilation failed: %v", err)
+	}
+
+	// Should generate a match expression on the bool variable
+	if !strings.Contains(result, "match is_remove_mode") {
+		t.Errorf("Expected 'match is_remove_mode', got:\n%s", result)
+	}
+
+	// Should have true and false branches
+	if !strings.Contains(result, "true =>") {
+		t.Errorf("Expected 'true =>' branch, got:\n%s", result)
+	}
+	if !strings.Contains(result, "false =>") {
+		t.Errorf("Expected 'false =>' branch, got:\n%s", result)
+	}
+
+	// Should contain lt_64 for mode detection
+	if !strings.Contains(result, "jet::lt_64") {
+		t.Errorf("Expected 'jet::lt_64', got:\n%s", result)
+	}
+
+	// Should contain multiply_64 and le_128 inside match arms
+	if !strings.Contains(result, "jet::multiply_64") {
+		t.Errorf("Expected 'jet::multiply_64', got:\n%s", result)
+	}
+	if !strings.Contains(result, "jet::le_128") {
+		t.Errorf("Expected 'jet::le_128', got:\n%s", result)
+	}
+}
+
+func TestBooleanIfElseWithSubtract(t *testing.T) {
+	// Test boolean if/else with arithmetic (subtract) in the true arm.
+	source := `
+package main
+
+import "simplicity/jet"
+
+const PoolInputB uint32 = 1
+const PoolOutputA uint32 = 0
+const PoolOutputB uint32 = 1
+const LpSupplyInput uint32 = 2
+
+func main() {
+	reserve0 := jet.CurrentAmount()
+	reserve1 := jet.InputAmount(PoolInputB)
+	newReserve0 := jet.OutputAmount(PoolOutputA)
+	newReserve1 := jet.OutputAmount(PoolOutputB)
+
+	isRemoveMode := jet.Lt64(newReserve0, reserve0)
+
+	if isRemoveMode {
+		totalSupply := jet.InputAmount(LpSupplyInput)
+		payout0 := reserve0 - newReserve0
+		lhsFloor := jet.Multiply64(payout0, totalSupply)
+		rhsFloor := jet.Multiply64(totalSupply, reserve0)
+		jet.Verify(jet.Le128(lhsFloor, rhsFloor))
+	} else {
+		kOld := jet.Multiply64(reserve0, reserve1)
+		kNew := jet.Multiply64(newReserve0, newReserve1)
+		jet.Verify(jet.Le128(kOld, kNew))
+	}
+}
+`
+
+	c := compiler.New(compiler.Config{
+		Target: "simplicityhl",
+		Debug:  false,
+	})
+
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Boolean if/else with subtract failed: %v", err)
+	}
+
+	if !strings.Contains(result, "match is_remove_mode") {
+		t.Errorf("Expected match on is_remove_mode, got:\n%s", result)
+	}
+	if !strings.Contains(result, "jet::subtract_64") {
+		t.Errorf("Expected jet::subtract_64 in true arm, got:\n%s", result)
+	}
+	if !strings.Contains(result, "jet::multiply_64") {
+		t.Errorf("Expected jet::multiply_64 in arms, got:\n%s", result)
+	}
+}

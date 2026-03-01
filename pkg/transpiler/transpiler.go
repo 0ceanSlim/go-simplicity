@@ -368,7 +368,19 @@ func (t *Transpiler) analyzeMainFunction(funcDecl *ast.FuncDecl) error {
 }
 
 // analyzeIfAsMatch checks if an if statement represents sum type pattern matching
+// or a boolean if/else (if boolVar { ... } else { ... }).
 func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, error) {
+	// Check for boolean if/else: if boolVar { ... } else { ... }
+	// where boolVar is a local jet call variable with ReturnType == "bool"
+	if ident, ok := ifStmt.Cond.(*ast.Ident); ok {
+		varName := t.toSnakeCase(ident.Name)
+		for _, jc := range t.jetCalls {
+			if jc.VarName == varName && jc.ReturnType == "bool" {
+				return t.analyzeBoolIfElse(ifStmt, varName)
+			}
+		}
+	}
+
 	// Check if condition is checking a sum type field (w.IsLeft, opt.IsSome, etc.)
 	scrutinee, pattern, varBase := t.extractSumTypeCondition(ifStmt.Cond)
 	if scrutinee == "" {
@@ -461,6 +473,137 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 	}
 
 	return match, nil
+}
+
+// analyzeBoolIfElse creates a MatchExpression with true/false patterns from a
+// boolean if/else statement (if boolVar { ... } else { ... }).
+func (t *Transpiler) analyzeBoolIfElse(ifStmt *ast.IfStmt, varName string) (*MatchExpression, error) {
+	match := &MatchExpression{
+		Scrutinee:   varName,
+		IsBoolMatch: true,
+	}
+
+	// True branch
+	trueStmts, err := t.analyzeArmBodyStmts(ifStmt.Body.List)
+	if err != nil {
+		return nil, err
+	}
+	match.Cases = append(match.Cases, MatchCase{
+		Pattern:   "true",
+		BodyStmts: trueStmts,
+	})
+
+	// False branch
+	if ifStmt.Else != nil {
+		var elseList []ast.Stmt
+		switch e := ifStmt.Else.(type) {
+		case *ast.BlockStmt:
+			elseList = e.List
+		case *ast.IfStmt:
+			elseList = e.Body.List
+		}
+		falseStmts, err := t.analyzeArmBodyStmts(elseList)
+		if err != nil {
+			return nil, err
+		}
+		match.Cases = append(match.Cases, MatchCase{
+			Pattern:   "false",
+			BodyStmts: falseStmts,
+		})
+	} else {
+		match.Cases = append(match.Cases, MatchCase{
+			Pattern:   "false",
+			BodyStmts: []string{"()"},
+		})
+	}
+
+	return match, nil
+}
+
+// analyzeArmBodyStmts processes a slice of statements from a boolean if/else arm.
+// Jet call and binary expression assignments are added temporarily to t.jetCalls
+// so that subsequent arm statements can reference them, then removed on return.
+func (t *Transpiler) analyzeArmBodyStmts(stmts []ast.Stmt) ([]string, error) {
+	savedLen := len(t.jetCalls)
+	var result []string
+	for _, stmt := range stmts {
+		s, err := t.analyzeArmBodyStmt(stmt)
+		if err != nil {
+			t.jetCalls = t.jetCalls[:savedLen]
+			return nil, err
+		}
+		if s != "" {
+			result = append(result, s)
+		}
+	}
+	t.jetCalls = t.jetCalls[:savedLen]
+	return result, nil
+}
+
+// analyzeArmBodyStmt converts a single statement inside a boolean arm.
+// Jet call assignments and binary expression assignments are handled specially:
+// the resulting variable is added to t.jetCalls so later arm stmts can reference it.
+func (t *Transpiler) analyzeArmBodyStmt(stmt ast.Stmt) (string, error) {
+	s, ok := stmt.(*ast.AssignStmt)
+	if !ok {
+		return t.analyzeStatement(stmt)
+	}
+	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+		return t.analyzeStatement(stmt)
+	}
+	ident, ok := s.Lhs[0].(*ast.Ident)
+	if !ok {
+		return t.analyzeStatement(stmt)
+	}
+	varName := t.toSnakeCase(ident.Name)
+
+	// Jet call assignment: varName := jet.X(args)
+	if callExpr, ok := s.Rhs[0].(*ast.CallExpr); ok {
+		if sel, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+			if selIdent, ok := sel.X.(*ast.Ident); ok && selIdent.Name == "jet" {
+				jetName := sel.Sel.Name
+				jetInfo, found := t.jetRegistry.Lookup(jetName)
+				if !found {
+					return "", fmt.Errorf("unknown jet function: jet.%s", jetName)
+				}
+				var argStrs []string
+				for _, arg := range callExpr.Args {
+					argStr, err := t.evaluateJetArg(arg)
+					if err != nil {
+						return "", err
+					}
+					argStrs = append(argStrs, argStr)
+				}
+				jc := JetCall{
+					VarName:    varName,
+					JetName:    jetInfo.SimplicityName,
+					Args:       strings.Join(argStrs, ", "),
+					ReturnType: jetInfo.ReturnType,
+				}
+				t.jetCalls = append(t.jetCalls, jc)
+				callStr := fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args)
+				if strings.HasPrefix(jc.ReturnType, "(bool,") {
+					return fmt.Sprintf("let (_, %s): %s = %s;", varName, jc.ReturnType, callStr), nil
+				}
+				return fmt.Sprintf("let %s: %s = %s;", varName, jc.ReturnType, callStr), nil
+			}
+		}
+	}
+
+	// Binary expression assignment: varName := a OP b
+	if binExpr, ok := s.Rhs[0].(*ast.BinaryExpr); ok {
+		if jc, matched := t.binaryExprToJetCall(varName, binExpr); matched {
+			t.jetCalls = append(t.jetCalls, *jc)
+			callStr := fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args)
+			if strings.HasPrefix(jc.ReturnType, "(bool,") {
+				return fmt.Sprintf("let (_, %s): %s = %s;", varName, jc.ReturnType, callStr), nil
+			}
+			return fmt.Sprintf("let %s: %s = %s;", varName, jc.ReturnType, callStr), nil
+		}
+	}
+
+	// Fallback
+	return t.analyzeStatement(stmt)
 }
 
 // analyzeStatementWithVarBinding analyzes a statement replacing witness field accesses
@@ -772,9 +915,6 @@ func (t *Transpiler) analyzeFunctionBody(block *ast.BlockStmt) (string, error) {
 	// Place constants before helper functions in source to guarantee ordering.
 	var lines []string
 	for _, stmt := range block.List {
-		if _, ok := stmt.(*ast.IfStmt); ok {
-			return "true", nil // if/else in helpers deferred to Phase 8
-		}
 		stmtStr, err := t.analyzeStatement(stmt)
 		if err != nil {
 			return "", err
@@ -1554,6 +1694,40 @@ func (t *Transpiler) generateMainFunction() {
 
 	// If we have match expressions, generate them
 	if t.hasMatchExpr && len(t.matchExprs) > 0 {
+		// Check if any match is a boolean if/else match
+		hasBoolMatch := false
+		for _, m := range t.matchExprs {
+			if m.IsBoolMatch {
+				hasBoolMatch = true
+				break
+			}
+		}
+
+		if hasBoolMatch {
+			// Boolean if/else path: emit all top-level jet calls (named + standalone)
+			// in declaration order, then emit the boolean match expression.
+			for _, jc := range t.jetCalls {
+				if jc.VarName != "" {
+					t.writeLetBinding("    ", jc)
+				} else {
+					if jc.Args == "" {
+						t.writeLine(fmt.Sprintf("    jet::%s()", jc.JetName))
+					} else {
+						t.writeLine(fmt.Sprintf("    jet::%s(%s)", jc.JetName, jc.formatBIP340Args()))
+					}
+				}
+			}
+			for _, match := range t.matchExprs {
+				if match.IsBoolMatch {
+					matchCode := t.generateMatchExpression(match, "    ")
+					t.writeLine(matchCode)
+				}
+			}
+			t.writeLine("}")
+			return
+		}
+
+		// Multisig / sum-type path: generate named let-bindings then match code.
 		// First, generate any jet calls that need to happen before the matches
 		for _, jc := range t.jetCalls {
 			if jc.VarName != "" {

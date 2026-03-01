@@ -37,6 +37,7 @@ make test
 - **Witness/parameter separation** — `var sig [64]byte` → `mod witness`; `const Pubkey = 0x...` → `mod param`
 - **Sum types** — struct with `IsLeft bool` → `Either<L, R>`; struct with `IsSome bool` + `Value T` → `Option<T>`
 - **Match expression generation** — `if w.IsLeft { ... } else { ... }` and `switch { case w.IsLeft: ... }` both compile to `match witness::W { Left(...) => { ... }, Right(...) => { ... } }`
+- **Boolean if/else** — `if boolVar { ... } else { ... }` where `boolVar` is a jet result with type `bool` compiles to `match boolVar { true => { ... }, false => { ... } }`
 - **Helper function inlining** — user-defined helper functions are emitted as named functions and inlined at call sites
 - **Operator mapping** — `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `==`, `&`, `|`, `^` auto-map to the correct `add_N`/`subtract_N`/`lt_N`/`and_N`/etc. jet based on operand width
 - **SHA256Add auto-select** — `jet.SHA256Add(ctx, data)` resolves to the correctly-sized `sha_256_ctx_8_add_N` variant at transpile time
@@ -59,6 +60,7 @@ make test
 | 2-of-3 multisig | `examples/multisig.go` | `Option<[u8; 64]>`, counter accumulation |
 | Helper functions | `examples/htlc_helper.go` | switch dispatch + inlining |
 | Double SHA-256 | `examples/double_sha256.go` | `SHA256Add` auto-select |
+| Constant-product AMM | anchor `pool_a.go`, `pool_b.go` | `lt_64`, `multiply_64`, `le_128`, boolean match |
 
 See [docs/contract-patterns.md](docs/contract-patterns.md) for Go source and generated SimplicityHL for each pattern.
 
@@ -125,7 +127,7 @@ tests/              # 60 tests
 - Dynamic arrays, slices, maps, channels, goroutines, interfaces
 - 3+ spending paths / nested `Either` (two arms only)
 - Recursive function calls
-- `if/else` inside helper function bodies
+- `if/else` inside helper function bodies (only `main()` supported)
 - Imports other than `simplicity/jet`
 - String types
 

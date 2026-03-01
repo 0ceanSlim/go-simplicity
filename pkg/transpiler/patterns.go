@@ -19,6 +19,7 @@ type MatchExpression struct {
 	Scrutinee     string      // The expression being matched
 	ScrutineeType string      // The type of the scrutinee (e.g., "Either<u256, [u8; 64]>")
 	Cases         []MatchCase // The cases
+	IsBoolMatch   bool        // true for boolean if/else (true/false patterns)
 }
 
 // analyzeTypeSwitchStmt extracts pattern matching info from a Go type switch
