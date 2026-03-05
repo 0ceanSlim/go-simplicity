@@ -348,7 +348,7 @@ func main() {
 		t.Fatalf("compilation failed: %v", err)
 	}
 
-	for _, want := range []string{"match witness::W {", "Left(data)", "Right(sig)"} {
+	for _, want := range []string{"match witness::W {", "Left(data:", "Right(sig:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("TestSwitchMatchGeneration: missing %q\nfull output:\n%s", want, out)
 		}
@@ -444,8 +444,8 @@ func main() {
 	}
 
 	// Inlined jet calls must appear inside the match arm body (Left arm), not just in fn verify_hashlock
-	if !strings.Contains(out, "Left(data)") {
-		t.Errorf("TestInlinedHelperCall: missing Left(data) arm\nfull output:\n%s", out)
+	if !strings.Contains(out, "Left(data:") {
+		t.Errorf("TestInlinedHelperCall: missing Left(data:...) arm\nfull output:\n%s", out)
 	}
 
 	// Count occurrences of sha_256_ctx_8_finalize — should appear at least twice (fn body + inlined)

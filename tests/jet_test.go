@@ -420,8 +420,8 @@ func main() {
 	if !strings.Contains(out, "jet::lt_32") {
 		t.Errorf("expected jet::lt_32 in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "jet::verify") {
-		t.Errorf("expected jet::verify in output, got:\n%s", out)
+	if !strings.Contains(out, "assert!") {
+		t.Errorf("expected assert! in output, got:\n%s", out)
 	}
 }
 
@@ -757,16 +757,21 @@ func main() {
 		{"output_asset", "jet::output_asset"},
 		{"eq_256 for asset check", "jet::eq_256"},
 		{"multiply_64 for kOld", "jet::multiply_64"},
-		{"le_128 for invariant", "jet::le_128"},
+		{"le_128 for invariant", "le_128("},
 		{"output_script_hash", "jet::output_script_hash"},
 		{"current_script_hash", "jet::current_script_hash"},
-		{"verify", "jet::verify"},
+		{"verify", "assert!"},
 	}
 
 	for _, check := range checks {
 		if !strings.Contains(out, check.contains) {
 			t.Errorf("AMM output missing %s (%q):\n%s", check.name, check.contains, out)
 		}
+	}
+
+	// Verify le_128 helper function is emitted (SimplicityHL 0.3.0 has no native u128 compare jets)
+	if !strings.Contains(out, "fn le_128(") {
+		t.Errorf("AMM output missing le_128 helper function definition:\n%s", out)
 	}
 }
 
@@ -909,8 +914,11 @@ func main() {
 	if !strings.Contains(result, "jet::multiply_64") {
 		t.Errorf("Expected 'jet::multiply_64', got:\n%s", result)
 	}
-	if !strings.Contains(result, "jet::le_128") {
-		t.Errorf("Expected 'jet::le_128', got:\n%s", result)
+	if !strings.Contains(result, "le_128(") {
+		t.Errorf("Expected 'le_128(' helper call, got:\n%s", result)
+	}
+	if !strings.Contains(result, "fn le_128(") {
+		t.Errorf("Expected 'fn le_128(' helper function definition, got:\n%s", result)
 	}
 }
 

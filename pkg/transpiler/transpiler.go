@@ -396,12 +396,24 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 		Pattern: pattern,
 	}
 
-	// For Some pattern, add a variable binding
+	// For Some/Left patterns, add a variable binding with type annotation.
+	// Simfony requires: Left(x: Type), Some(x: Type).
+	fieldInfo := t.getEitherFieldInfo(varBase)
 	switch pattern {
 	case "Some":
 		thenCase.VarName = "sig"
+		if fieldInfo != nil && fieldInfo.RightType != "" {
+			thenCase.VarType = fieldInfo.RightType
+		} else if armType := t.resolveArmVarType(varBase, "Some"); armType != "" {
+			thenCase.VarType = armType
+		}
 	case "Left":
 		thenCase.VarName = "data"
+		if fieldInfo != nil && fieldInfo.LeftType != "" {
+			thenCase.VarType = fieldInfo.LeftType
+		} else if armType := t.resolveArmVarType(varBase, "Left"); armType != "" {
+			thenCase.VarType = armType
+		}
 	}
 
 	// Process body statements with bound variable substitution
@@ -434,9 +446,19 @@ func (t *Transpiler) analyzeIfAsMatch(ifStmt *ast.IfStmt) (*MatchExpression, err
 			Pattern: elsePattern,
 		}
 
-		// For Right pattern, add a variable binding
+		// For Right/Some patterns, add a variable binding with type annotation.
 		if elsePattern == "Right" {
 			elseCase.VarName = "sig"
+			if fieldInfo != nil && fieldInfo.RightType != "" {
+				elseCase.VarType = fieldInfo.RightType
+			} else if armType := t.resolveArmVarType(varBase, "Right"); armType != "" {
+				elseCase.VarType = armType
+			}
+		} else if elsePattern == "Some" {
+			elseCase.VarName = "sig"
+			if armType := t.resolveArmVarType(varBase, "Some"); armType != "" {
+				elseCase.VarType = armType
+			}
 		}
 
 		switch e := ifStmt.Else.(type) {
@@ -581,7 +603,10 @@ func (t *Transpiler) analyzeArmBodyStmt(stmt ast.Stmt) (string, error) {
 					ReturnType: jetInfo.ReturnType,
 				}
 				t.jetCalls = append(t.jetCalls, jc)
-				callStr := fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args)
+				callStr := formatJetCallExpr(jc.JetName, jc.Args)
+				if kind := liquidKind(jc.JetName); kind != noLiquidUnwrap {
+					return strings.Join(buildLiquidJetLines(varName, callStr, kind), "\n"), nil
+				}
 				if strings.HasPrefix(jc.ReturnType, "(bool,") {
 					return fmt.Sprintf("let (_, %s): %s = %s;", varName, jc.ReturnType, callStr), nil
 				}
@@ -594,7 +619,7 @@ func (t *Transpiler) analyzeArmBodyStmt(stmt ast.Stmt) (string, error) {
 	if binExpr, ok := s.Rhs[0].(*ast.BinaryExpr); ok {
 		if jc, matched := t.binaryExprToJetCall(varName, binExpr); matched {
 			t.jetCalls = append(t.jetCalls, *jc)
-			callStr := fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args)
+			callStr := formatJetCallExpr(jc.JetName, jc.Args)
 			if strings.HasPrefix(jc.ReturnType, "(bool,") {
 				return fmt.Sprintf("let (_, %s): %s = %s;", varName, jc.ReturnType, callStr), nil
 			}
@@ -700,6 +725,63 @@ func (t *Transpiler) getEitherFieldInfo(varBase string) *EitherFieldInfo {
 	return nil
 }
 
+// resolveArmVarType derives the match arm bound-variable type from the
+// witness's Simfony type string and the match arm pattern.
+// For Option<T>: Some arm binds T.
+// For Either<L, R>: Left arm binds L, Right arm binds R.
+func (t *Transpiler) resolveArmVarType(varBase string, pattern string) string {
+	upperName := strings.ToUpper(t.toSnakeCase(varBase))
+	for _, w := range t.witnessValues {
+		if strings.ToUpper(w.Name) == upperName {
+			return extractArmTypeFromSimfonyType(w.Type, pattern)
+		}
+	}
+	return ""
+}
+
+// extractArmTypeFromSimfonyType parses a Simfony type string and extracts the
+// inner type for a specific match arm pattern.
+func extractArmTypeFromSimfonyType(simfonyType, pattern string) string {
+	switch pattern {
+	case "Some":
+		if strings.HasPrefix(simfonyType, "Option<") && strings.HasSuffix(simfonyType, ">") {
+			return simfonyType[len("Option<") : len(simfonyType)-1]
+		}
+	case "Left":
+		if strings.HasPrefix(simfonyType, "Either<") && strings.HasSuffix(simfonyType, ">") {
+			inner := simfonyType[len("Either<") : len(simfonyType)-1]
+			left, _ := splitAtTopLevelComma(inner)
+			return left
+		}
+	case "Right":
+		if strings.HasPrefix(simfonyType, "Either<") && strings.HasSuffix(simfonyType, ">") {
+			inner := simfonyType[len("Either<") : len(simfonyType)-1]
+			_, right := splitAtTopLevelComma(inner)
+			return right
+		}
+	}
+	return ""
+}
+
+// splitAtTopLevelComma splits a type parameter string at the first comma that
+// is not nested inside < >, ( ), or [ ].
+func splitAtTopLevelComma(s string) (string, string) {
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '<', '(', '[':
+			depth++
+		case '>', ')', ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:])
+			}
+		}
+	}
+	return s, ""
+}
+
 // replaceWitnessFieldAccess replaces all `prefix + field_name` occurrences in s.
 // If replacement is non-empty, every occurrence is replaced with replacement.
 // If replacement is empty, every occurrence is replaced with the field_name itself.
@@ -772,11 +854,29 @@ func (t *Transpiler) analyzeSwitchAsMatch(switchStmt *ast.SwitchStmt) (*MatchExp
 		}
 
 		mc := MatchCase{Pattern: pattern}
+		caseFieldInfo := t.getEitherFieldInfo(varBase)
 		switch pattern {
 		case "Left":
 			mc.VarName = "data"
-		case "Right", "Some":
+			if caseFieldInfo != nil && caseFieldInfo.LeftType != "" {
+				mc.VarType = caseFieldInfo.LeftType
+			} else if armType := t.resolveArmVarType(varBase, "Left"); armType != "" {
+				mc.VarType = armType
+			}
+		case "Right":
 			mc.VarName = "sig"
+			if caseFieldInfo != nil && caseFieldInfo.RightType != "" {
+				mc.VarType = caseFieldInfo.RightType
+			} else if armType := t.resolveArmVarType(varBase, "Right"); armType != "" {
+				mc.VarType = armType
+			}
+		case "Some":
+			mc.VarName = "sig"
+			if caseFieldInfo != nil && caseFieldInfo.RightType != "" {
+				mc.VarType = caseFieldInfo.RightType
+			} else if armType := t.resolveArmVarType(varBase, "Some"); armType != "" {
+				mc.VarType = armType
+			}
 		}
 
 		for _, s := range caseClause.Body {
@@ -852,11 +952,8 @@ func (t *Transpiler) evaluateJetArg(arg ast.Expr) (string, error) {
 		// Binary expression used inline as a jet argument (e.g. jet.Verify(x == y)).
 		// Attempt to generate a runtime jet call for the comparison/operation.
 		// A synthetic var name is used since this result is used inline, not bound.
-		if jc, ok := t.binaryExprToJetCall("__inline", a); ok {
-			if jc.Args == "" {
-				return fmt.Sprintf("jet::%s()", jc.JetName), nil
-			}
-			return fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args), nil
+		if jc, ok := t.binaryExprToJetCall("i_inline", a); ok {
+			return formatJetCallExpr(jc.JetName, jc.Args), nil
 		}
 		return t.evaluateExpression(arg)
 	case *ast.CallExpr:
@@ -1413,16 +1510,197 @@ func (t *Transpiler) operatorReturnType(op token.Token, width string) string {
 	}
 }
 
+// liquidJetKind classifies Liquid introspection jets whose Simfony return type
+// is a compound Either/Option wrapper that must be unwrapped to yield a plain
+// u64 (amount) or u256 (asset id).
+type liquidJetKind int
+
+const (
+	noLiquidUnwrap    liquidJetKind = iota
+	amountPairNoOpt                 // current_amount → (Asset1, Amount1); extract u64
+	amountPairOpt                   // input_amount / output_amount → Option<(Asset1, Amount1)>
+	assetNoOpt                      // current_asset → Asset1; extract u256
+	assetOpt                        // input_asset / output_asset → Option<Asset1>
+	optScalarU256                   // output_script_hash / input_script_hash → Option<u256>
+	issuanceAmountOpt               // issuance_asset_amount → Option<Option<Amount1>>
+)
+
+func liquidKind(simName string) liquidJetKind {
+	switch simName {
+	case "current_amount":
+		return amountPairNoOpt
+	case "input_amount", "output_amount":
+		return amountPairOpt
+	case "current_asset":
+		return assetNoOpt
+	case "input_asset", "output_asset":
+		return assetOpt
+	case "output_script_hash", "input_script_hash":
+		return optScalarU256
+	case "issuance_asset_amount":
+		return issuanceAmountOpt
+	}
+	return noLiquidUnwrap
+}
+
+const (
+	zero64  = "0x0000000000000000"
+	zero256 = "0x0000000000000000000000000000000000000000000000000000000000000000"
+)
+
+// buildLiquidJetLines returns the Simfony lines (without leading indent) that
+// bind the explicit scalar from a Liquid introspection jet call.
+// varName is the final Go-level variable; jetCall is the full "jet::foo(args)" expression.
+func buildLiquidJetLines(varName, jetCall string, kind liquidJetKind) []string {
+	// SimplicityHL 0.3.0 identifiers must start with ASCII_ALPHA (not underscore).
+	// Use "c_" prefix for intermediate conf variables.
+	confVar := "c_" + varName
+	switch kind {
+	case amountPairNoOpt:
+		// jet::current_amount() → (Asset1, Amount1)
+		// Tuple destructure; wildcard _ discards asset.
+		// SimplicityHL match_arm: single_expression arms MUST have trailing comma.
+		return []string{
+			fmt.Sprintf("let (_, %s): (Asset1, Amount1) = %s;", confVar, jetCall),
+			fmt.Sprintf("let %s: u64 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u64) => v, };", varName, confVar, zero64),
+		}
+	case amountPairOpt:
+		// jet::input_amount(n)/output_amount(n) → Option<(Asset1, Amount1)>
+		// First match unwraps Option (2 arms: None/Some), then destructure tuple.
+		return []string{
+			fmt.Sprintf("let (_, %s): (Asset1, Amount1) = match %s { None => { assert!(false); (Right(%s), Right(%s)) }, Some(v: (Asset1, Amount1)) => v, };", confVar, jetCall, zero256, zero64),
+			fmt.Sprintf("let %s: u64 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u64) => v, };", varName, confVar, zero64),
+		}
+	case assetNoOpt:
+		// jet::current_asset() → Asset1 = Either<(u1,u256), u256>
+		return []string{
+			fmt.Sprintf("let %s: Asset1 = %s;", confVar, jetCall),
+			fmt.Sprintf("let %s: u256 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u256) => v, };", varName, confVar, zero256),
+		}
+	case assetOpt:
+		// jet::input_asset(n)/output_asset(n) → Option<Asset1>
+		// First match unwraps Option, then match extracts u256 from Either.
+		return []string{
+			fmt.Sprintf("let %s: Asset1 = match %s { None => { assert!(false); Right(%s) }, Some(v: Asset1) => v, };", confVar, jetCall, zero256),
+			fmt.Sprintf("let %s: u256 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u256) => v, };", varName, confVar, zero256),
+		}
+	case optScalarU256:
+		// jet::output_script_hash(n) → Option<u256>
+		// Single match unwraps Option.
+		return []string{
+			fmt.Sprintf("let %s: u256 = match %s { None => { assert!(false); %s }, Some(v: u256) => v, };", varName, jetCall, zero256),
+		}
+	case issuanceAmountOpt:
+		// jet::issuance_asset_amount(n) → Option<Option<Amount1>>
+		// Three-step unwrap: Option → Option → Either.
+		optVar := "o_" + varName
+		return []string{
+			fmt.Sprintf("let %s: Option<Amount1> = match %s { None => { assert!(false); Some(Right(%s)) }, Some(v: Option<Amount1>) => v, };", optVar, jetCall, zero64),
+			fmt.Sprintf("let %s: Amount1 = match %s { None => { assert!(false); Right(%s) }, Some(v: Amount1) => v, };", confVar, optVar, zero64),
+			fmt.Sprintf("let %s: u64 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u64) => v, };", varName, confVar, zero64),
+		}
+	}
+	return nil
+}
+
+// formatJetCallExpr formats a jet call expression.
+// u128CompareJets maps 128-bit comparison jet names to their helper function
+// names. SimplicityHL 0.3.0 has no native 128-bit comparison jets; we emit
+// helper functions that decompose u128 into (u64, u64) and compare piecewise.
+var u128CompareJets = map[string]bool{
+	"eq_128": true,
+	"le_128": true,
+	"lt_128": true,
+}
+
+// formatJetCallExpr formats a jet call expression.
+// SimplicityHL 0.3.0 uses assert!() instead of jet::verify(), and 128-bit
+// comparison jets are emitted as user-defined helper function calls.
+func formatJetCallExpr(jetName, args string) string {
+	if jetName == "verify" {
+		return fmt.Sprintf("assert!(%s)", args)
+	}
+	if u128CompareJets[jetName] {
+		// Call as user-defined function, not jet
+		return fmt.Sprintf("%s(%s)", jetName, args)
+	}
+	if args == "" {
+		return fmt.Sprintf("jet::%s()", jetName)
+	}
+	return fmt.Sprintf("jet::%s(%s)", jetName, args)
+}
+
+// u128HelperFunctions returns SimplicityHL helper function definitions for
+// 128-bit comparisons that are needed by the current program.
+func u128HelperFunctions(needed map[string]bool) string {
+	var sb strings.Builder
+
+	if needed["eq_128"] {
+		sb.WriteString(`fn eq_128(a: u128, b: u128) -> bool {
+    let (ah, al): (u64, u64) = <u128>::into(a);
+    let (bh, bl): (u64, u64) = <u128>::into(b);
+    match jet::eq_64(ah, bh) {
+        true => jet::eq_64(al, bl),
+        false => false,
+    }
+}
+
+`)
+	}
+	if needed["le_128"] {
+		sb.WriteString(`fn le_128(a: u128, b: u128) -> bool {
+    let (ah, al): (u64, u64) = <u128>::into(a);
+    let (bh, bl): (u64, u64) = <u128>::into(b);
+    match jet::lt_64(ah, bh) {
+        true => true,
+        false => {
+            match jet::eq_64(ah, bh) {
+                true => jet::le_64(al, bl),
+                false => false,
+            }
+        }
+    }
+}
+
+`)
+	}
+	if needed["lt_128"] {
+		sb.WriteString(`fn lt_128(a: u128, b: u128) -> bool {
+    let (ah, al): (u64, u64) = <u128>::into(a);
+    let (bh, bl): (u64, u64) = <u128>::into(b);
+    match jet::lt_64(ah, bh) {
+        true => true,
+        false => {
+            match jet::eq_64(ah, bh) {
+                true => jet::lt_64(al, bl),
+                false => false,
+            }
+        }
+    }
+}
+
+`)
+	}
+	return sb.String()
+}
+
 // writeLetBinding emits a `let` statement for a JetCall that has a variable
 // name.  For arithmetic jets that return a carry/borrow bit as (bool, uN), the
 // carry is discarded with the `(_, varName)` destructuring pattern.
+// Liquid introspection jets (amount/asset) are expanded into multi-line
+// Either-unwrapping code so the final variable holds a plain u64 or u256.
 func (t *Transpiler) writeLetBinding(indent string, jc JetCall) {
-	var stmt string
-	callExpr := fmt.Sprintf("jet::%s(%s)", jc.JetName, jc.Args)
-	if jc.Args == "" {
-		callExpr = fmt.Sprintf("jet::%s()", jc.JetName)
+	callExpr := formatJetCallExpr(jc.JetName, jc.Args)
+
+	kind := liquidKind(jc.JetName)
+	if kind != noLiquidUnwrap {
+		for _, line := range buildLiquidJetLines(jc.VarName, callExpr, kind) {
+			t.writeLine(indent + line)
+		}
+		return
 	}
 
+	var stmt string
 	if strings.HasPrefix(jc.ReturnType, "(bool,") {
 		// Discard the carry/borrow flag — the caller only wants the numeric result.
 		stmt = fmt.Sprintf("%slet (_, %s): %s = %s;", indent, jc.VarName, jc.ReturnType, callExpr)
@@ -1615,7 +1893,7 @@ func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, e
 
 	// Return the jet call syntax for SimplicityHL
 	if len(argStrs) == 0 {
-		return fmt.Sprintf("jet::%s()", jetInfo.SimplicityName), nil
+		return formatJetCallExpr(jetInfo.SimplicityName, ""), nil
 	}
 
 	// BIP340Verify requires special tuple formatting: ((pubkey, msg), sig)
@@ -1623,7 +1901,7 @@ func (t *Transpiler) evaluateJetCall(jetName string, args []ast.Expr) (string, e
 		return fmt.Sprintf("jet::%s((%s, %s), %s)", jetInfo.SimplicityName, argStrs[0], argStrs[1], argStrs[2]), nil
 	}
 
-	return fmt.Sprintf("jet::%s(%s)", jetInfo.SimplicityName, strings.Join(argStrs, ", ")), nil
+	return formatJetCallExpr(jetInfo.SimplicityName, strings.Join(argStrs, ", ")), nil
 }
 
 func (t *Transpiler) generateCode() {
@@ -1657,6 +1935,41 @@ func (t *Transpiler) generateCode() {
 	t.writeLine("}")
 	t.writeLine("")
 
+	// Detect which u128 helper functions are needed by scanning jet calls
+	// and match expression body statements for u128 compare references.
+	neededU128 := make(map[string]bool)
+	for _, jc := range t.jetCalls {
+		if u128CompareJets[jc.JetName] {
+			neededU128[jc.JetName] = true
+		}
+		// Also check args — e.g. verify wrapping le_128(...)
+		for name := range u128CompareJets {
+			if strings.Contains(jc.Args, name+"(") {
+				neededU128[name] = true
+			}
+		}
+	}
+	for _, m := range t.matchExprs {
+		for _, c := range m.Cases {
+			for _, stmt := range c.BodyStmts {
+				for name := range u128CompareJets {
+					if strings.Contains(stmt, name+"(") {
+						neededU128[name] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Emit u128 helper functions before user functions and main
+	if len(neededU128) > 0 {
+		helpers := u128HelperFunctions(neededU128)
+		for _, line := range strings.Split(strings.TrimRight(helpers, "\n"), "\n") {
+			t.writeLine(line)
+		}
+		t.writeLine("")
+	}
+
 	// Generate functions
 	for _, function := range t.functions {
 		t.generateFunction(function)
@@ -1689,8 +2002,70 @@ func (t *Transpiler) generateFunction(function Function) {
 	t.writeLine("")
 }
 
+// deduplicateWitnessRefs scans jet calls and match arm bodies for witness
+// references. Any witness referenced more than once is bound to a local
+// variable (emitted as a let statement), and all occurrences in jet call args
+// and match arm bodies are replaced with the local variable name.
+func (t *Transpiler) deduplicateWitnessRefs() {
+	// Count witness references across all jet calls and match arm bodies
+	witnessCounts := make(map[string]int) // "witness::NAME" → count
+	for _, jc := range t.jetCalls {
+		for _, w := range t.witnessValues {
+			ref := fmt.Sprintf("witness::%s", strings.ToUpper(w.Name))
+			witnessCounts[ref] += strings.Count(jc.Args, ref)
+		}
+	}
+	for _, m := range t.matchExprs {
+		for _, c := range m.Cases {
+			for _, stmt := range c.BodyStmts {
+				for _, w := range t.witnessValues {
+					ref := fmt.Sprintf("witness::%s", strings.ToUpper(w.Name))
+					witnessCounts[ref] += strings.Count(stmt, ref)
+				}
+			}
+		}
+	}
+
+	// For each witness used more than once, emit a let binding and replace refs
+	for _, w := range t.witnessValues {
+		ref := fmt.Sprintf("witness::%s", strings.ToUpper(w.Name))
+		if witnessCounts[ref] <= 1 {
+			continue
+		}
+		// Determine the type for the let binding
+		witnessType := w.Type
+		if witnessType == "auto" {
+			if w.Value == "true" || w.Value == "false" {
+				witnessType = "bool"
+			} else {
+				witnessType = "u64"
+			}
+		}
+		localVar := strings.ToLower(w.Name)
+		t.writeLine(fmt.Sprintf("    let %s: %s = witness::%s;", localVar, witnessType, strings.ToUpper(w.Name)))
+
+		// Replace all witness::NAME references with the local variable
+		for i := range t.jetCalls {
+			t.jetCalls[i].Args = strings.ReplaceAll(t.jetCalls[i].Args, ref, localVar)
+		}
+		for i := range t.matchExprs {
+			for j := range t.matchExprs[i].Cases {
+				for k := range t.matchExprs[i].Cases[j].BodyStmts {
+					t.matchExprs[i].Cases[j].BodyStmts[k] = strings.ReplaceAll(
+						t.matchExprs[i].Cases[j].BodyStmts[k], ref, localVar)
+				}
+			}
+		}
+	}
+}
+
 func (t *Transpiler) generateMainFunction() {
 	t.writeLine("fn main() {")
+
+	// Deduplicate witness references: in SimplicityHL, each witness value can
+	// only be consumed once (linear typing). If a witness is referenced more
+	// than once in jet calls or match arms, bind it to a local variable first.
+	t.deduplicateWitnessRefs()
 
 	// If we have match expressions, generate them
 	if t.hasMatchExpr && len(t.matchExprs) > 0 {
@@ -1710,11 +2085,11 @@ func (t *Transpiler) generateMainFunction() {
 				if jc.VarName != "" {
 					t.writeLetBinding("    ", jc)
 				} else {
-					if jc.Args == "" {
-						t.writeLine(fmt.Sprintf("    jet::%s()", jc.JetName))
-					} else {
-						t.writeLine(fmt.Sprintf("    jet::%s(%s)", jc.JetName, jc.formatBIP340Args()))
+					args := jc.Args
+					if jc.JetName == "bip_0340_verify" {
+						args = jc.formatBIP340Args()
 					}
+					t.writeLine(fmt.Sprintf("    %s;", formatJetCallExpr(jc.JetName, args)))
 				}
 			}
 			for _, match := range t.matchExprs {
@@ -1764,12 +2139,11 @@ func (t *Transpiler) generateMainFunction() {
 				t.writeLetBinding("    ", jc)
 			} else {
 				// This is a standalone call (like BIP340Verify)
-				if jc.Args == "" {
-					t.writeLine(fmt.Sprintf("    jet::%s()", jc.JetName))
-				} else {
-					// For BIP340Verify and similar, format with tuple syntax
-					t.writeLine(fmt.Sprintf("    jet::%s(%s)", jc.JetName, jc.formatBIP340Args()))
+				args := jc.Args
+				if jc.JetName == "bip_0340_verify" {
+					args = jc.formatBIP340Args()
 				}
+				t.writeLine(fmt.Sprintf("    %s;", formatJetCallExpr(jc.JetName, args)))
 			}
 		}
 		t.writeLine("}")
@@ -1843,7 +2217,11 @@ func (t *Transpiler) generateMultisigMatchCode() {
 		for _, mc := range match.Cases {
 			pattern := mc.Pattern
 			if mc.VarName != "" {
-				pattern = fmt.Sprintf("%s(%s)", mc.Pattern, mc.VarName)
+				if mc.VarType != "" {
+					pattern = fmt.Sprintf("%s(%s: %s)", mc.Pattern, mc.VarName, mc.VarType)
+				} else {
+					pattern = fmt.Sprintf("%s(%s)", mc.Pattern, mc.VarName)
+				}
 			}
 
 			switch mc.Pattern {
@@ -1872,7 +2250,7 @@ func (t *Transpiler) generateMultisigMatchCode() {
 	// Final verification - require at least 2 signatures
 	t.writeLine("")
 	t.writeLine("    // Require at least 2 valid signatures")
-	t.writeLine(fmt.Sprintf("    jet::verify(jet::le_32(2, count_%d))", len(t.matchExprs)-1))
+	t.writeLine(fmt.Sprintf("    assert!(jet::le_32(2, count_%d))", len(t.matchExprs)-1))
 }
 
 // formatBIP340Args formats arguments for BIP340Verify with proper tuple syntax
@@ -1941,7 +2319,7 @@ func (t *Transpiler) generateUnrolledLoopCode() {
 		}
 
 		// Final verification
-		t.writeLine(fmt.Sprintf("    jet::verify(jet::le_32(2, count_%d))", loop.Iterations-1))
+		t.writeLine(fmt.Sprintf("    assert!(jet::le_32(2, count_%d))", loop.Iterations-1))
 	}
 }
 

@@ -88,8 +88,8 @@ func TestExampleHTLC(t *testing.T) {
 		{"sender pubkey param", "SENDER_PUBKEY: u256"},
 		{"hash lock param", "HASH_LOCK: u256"},
 		{"match expression", "match witness::W {"},
-		{"Left arm", "Left(data)"},
-		{"Right arm", "Right(sig)"},
+		{"Left arm", "Left(data:"},
+		{"Right arm", "Right(sig:"},
 		{"destructuring", "let (preimage, recipient_sig):"},
 		{"sha_256_ctx_8_init jet", "jet::sha_256_ctx_8_init()"},
 		{"sha_256_ctx_8_add_32 jet", "jet::sha_256_ctx_8_add_32("},
@@ -193,7 +193,7 @@ func TestExampleHTLCTestable(t *testing.T) {
 		{"real bob test sig", "0x6896bd60eeae296db48a229ff71dfe071bde413e6d43f917dc8dcf8c78de3341"},
 		// Either match structure
 		{"match expression", "match witness::W {"},
-		{"Left arm", "Left(data)"},
+		{"Left arm", "Left(data:"},
 		{"Right arm", "Right("},
 		// SHA-256 chain in Left arm
 		{"sha_256_ctx_8_init jet", "jet::sha_256_ctx_8_init()"},
@@ -235,8 +235,8 @@ func TestExampleAtomicSwap(t *testing.T) {
 		{"hash lock param", "HASH_LOCK: u256"},
 		{"min refund height param", "MIN_REFUND_HEIGHT: u32"},
 		{"match expression", "match witness::W {"},
-		{"Left arm", "Left(data)"},
-		{"Right arm", "Right(sig)"},
+		{"Left arm", "Left(data:"},
+		{"Right arm", "Right(sig:"},
 		{"destructuring", "let (preimage, recipient_sig):"},
 		{"sha_256_ctx_8_init jet", "jet::sha_256_ctx_8_init()"},
 		{"sha_256_ctx_8_add_32 jet", "jet::sha_256_ctx_8_add_32("},
@@ -311,8 +311,8 @@ func TestExampleHTLCHelper(t *testing.T) {
 		{"sha_256_ctx_8_init in helper/Left arm", "jet::sha_256_ctx_8_init()"},
 		{"eq_256 in helper/Left arm", "jet::eq_256("},
 		{"match expression", "match witness::W {"},
-		{"Left arm", "Left(data)"},
-		{"Right arm", "Right(sig)"},
+		{"Left arm", "Left(data:"},
+		{"Right arm", "Right(sig:"},
 		{"destructuring", "let (preimage, recipient_sig):"},
 		{"check_lock_height in Right arm", "jet::check_lock_height(param::MIN_REFUND_HEIGHT)"},
 		{"bip_0340_verify in both arms", "jet::bip_0340_verify("},
@@ -358,11 +358,11 @@ func TestExampleMultisig(t *testing.T) {
 		{"counter count_0", "let count_0: u32 ="},
 		{"counter count_1", "let count_1: u32 = count_0 +"},
 		{"counter count_2", "let count_2: u32 = count_1 +"},
-		{"Some arm", "Some(sig) => {"},
+		{"Some arm", "Some(sig:"},
 		{"None arm no braces", "None => 0,"},
 		{"bip_0340_verify with semicolon", "jet::bip_0340_verify((param::ALICE_PUBKEY, msg), sig);"},
 		{"return value 1", "1"},
-		{"final verify", "jet::verify(jet::le_32(2, count_2))"},
+		{"final verify", "assert!(jet::le_32(2, count_2))"},
 	}
 
 	for _, c := range checks {
@@ -389,8 +389,8 @@ func TestExampleVault(t *testing.T) {
 	}{
 		{"Either witness type", "Either<[u8; 64], [u8; 64]>"},
 		{"match expression", "match witness::W {"},
-		{"Left arm", "Left(data)"},
-		{"Right arm", "Right(sig)"},
+		{"Left arm", "Left(data:"},
+		{"Right arm", "Right(sig:"},
 		{"check_lock_height in Right arm", "jet::check_lock_height(param::COLD_KEY_UNLOCK)"},
 		{"output_script_hash in Right arm", "jet::output_script_hash("},
 		{"eq_256 in Right arm", "jet::eq_256("},
@@ -430,8 +430,8 @@ func TestExampleOraclePrice(t *testing.T) {
 	}{
 		{"Either witness type", "Either<[u8; 64], [u8; 64]>"},
 		{"match expression", "match witness::W {"},
-		{"Left arm", "Left(data)"},
-		{"Right arm", "Right(sig)"},
+		{"Left arm", "Left(data:"},
+		{"Right arm", "Right(sig:"},
 		{"oracle pubkey verify in Left arm", "jet::bip_0340_verify((param::ORACLE_PUBKEY, msg), data)"},
 		{"owner pubkey verify in Right arm", "jet::bip_0340_verify((param::OWNER_PUBKEY, msg), sig)"},
 	}

@@ -193,16 +193,26 @@ func (t *Transpiler) generateMatchExpression(match *MatchExpression, indent stri
 	sb.WriteString(fmt.Sprintf("%smatch %s {\n", indent, match.Scrutinee))
 
 	for i, mc := range match.Cases {
-		// Generate the pattern
+		// Generate the pattern — Simfony requires type annotations in match arm
+		// bindings: Left(x: Type), Right(x: Type), Some(x: Type).
 		pattern := mc.Pattern
 		if mc.VarName != "" {
-			pattern = fmt.Sprintf("%s(%s)", mc.Pattern, mc.VarName)
+			if mc.VarType != "" {
+				pattern = fmt.Sprintf("%s(%s: %s)", mc.Pattern, mc.VarName, mc.VarType)
+			} else {
+				pattern = fmt.Sprintf("%s(%s)", mc.Pattern, mc.VarName)
+			}
 		}
 
 		sb.WriteString(fmt.Sprintf("%s    %s => {\n", indent, pattern))
 
 		// Generate body statements (each entry may span multiple lines)
 		for _, bodyStmt := range mc.BodyStmts {
+			// Add ; to statements that don't already end with ; or }
+			trimmed := strings.TrimRight(bodyStmt, " \t\r\n")
+			if !strings.HasSuffix(trimmed, ";") && !strings.HasSuffix(trimmed, "}") {
+				bodyStmt = trimmed + ";"
+			}
 			for _, line := range strings.Split(bodyStmt, "\n") {
 				if strings.TrimSpace(line) != "" {
 					sb.WriteString(fmt.Sprintf("%s        %s\n", indent, line))
