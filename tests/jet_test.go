@@ -757,7 +757,8 @@ func main() {
 		{"output_asset", "jet::output_asset"},
 		{"eq_256 for asset check", "jet::eq_256"},
 		{"multiply_64 for kOld", "jet::multiply_64"},
-		{"le_128 for invariant", "le_128("},
+		{"k-invariant borrow arithmetic", "jet::full_subtract_64("},
+		{"k-invariant unwrap_left", "unwrap_left::<()>(<bool>::into("},
 		{"output_script_hash", "jet::output_script_hash"},
 		{"current_script_hash", "jet::current_script_hash"},
 		{"verify", "assert!"},
@@ -769,9 +770,9 @@ func main() {
 		}
 	}
 
-	// Verify le_128 helper function is emitted (SimplicityHL 0.3.0 has no native u128 compare jets)
-	if !strings.Contains(out, "fn le_128(") {
-		t.Errorf("AMM output missing le_128 helper function definition:\n%s", out)
+	// le_128 is now inlined as borrow-arithmetic for top-level verify — no helper emitted.
+	if strings.Contains(out, "fn le_128(") {
+		t.Errorf("AMM output should not emit fn le_128 helper (inlined as borrow-arithmetic):\n%s", out)
 	}
 }
 
@@ -974,5 +975,149 @@ func main() {
 	}
 	if !strings.Contains(result, "jet::multiply_64") {
 		t.Errorf("Expected jet::multiply_64 in arms, got:\n%s", result)
+	}
+}
+
+// ── Bug 1 fix: Liquid jet unwrap emission ────────────────────────────────────
+
+// TestLiquidJetUnwrapEmission verifies that amountPairOpt, assetOpt, and
+// optScalarU256 jets emit unwrap/unwrap_right instead of match with assert!(false).
+func TestLiquidJetUnwrapEmission(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+const Out0 uint32 = 0
+const In1  uint32 = 1
+
+func main() {
+	amt  := jet.OutputAmount(Out0)
+	_    = amt
+	amt2 := jet.InputAmount(In1)
+	_    = amt2
+	asst := jet.OutputAsset(Out0)
+	_    = asst
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// Must use unwrap() for Option unwrapping.
+	if !strings.Contains(result, "unwrap(") {
+		t.Errorf("Expected 'unwrap(' in output, got:\n%s", result)
+	}
+	// Must use unwrap_right for Either extraction.
+	if !strings.Contains(result, "unwrap_right::<(u1, u256)>(") {
+		t.Errorf("Expected 'unwrap_right::<(u1, u256)>(' in output, got:\n%s", result)
+	}
+	// Must NOT use match-based false-arm pattern.
+	if strings.Contains(result, "None => { assert!(false)") {
+		t.Errorf("Bug 1 regression: found 'None => { assert!(false)' in output:\n%s", result)
+	}
+	if strings.Contains(result, "Left(x:") && strings.Contains(result, "assert!(false)") {
+		t.Errorf("Bug 1 regression: found Left(x: ... assert!(false) in output:\n%s", result)
+	}
+}
+
+// ── Bug 2+3 fix: le_128 / lt_128 in Verify context ──────────────────────────
+
+// TestLe128VerifyExpansion verifies that a top-level jet.Verify(jet.Le128(a,b))
+// is emitted as borrow-arithmetic (no CASE nodes) instead of calling le_128().
+func TestLe128VerifyExpansion(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	reserve0 := jet.CurrentAmount()
+	reserve1 := jet.CurrentAmount()
+	kOld := jet.Multiply64(reserve0, reserve1)
+	newR0 := jet.CurrentAmount()
+	newR1 := jet.CurrentAmount()
+	kNew := jet.Multiply64(newR0, newR1)
+	jet.Verify(jet.Le128(kOld, kNew))
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	if !strings.Contains(result, "jet::full_subtract_64(") {
+		t.Errorf("Expected 'jet::full_subtract_64(' in output, got:\n%s", result)
+	}
+	if !strings.Contains(result, "unwrap_left::<()>(<bool>::into(") {
+		t.Errorf("Expected 'unwrap_left::<()>(<bool>::into(' in output, got:\n%s", result)
+	}
+	// Helper function must NOT be emitted when le_128 only used in verify.
+	if strings.Contains(result, "fn le_128(") {
+		t.Errorf("Bug 2 regression: 'fn le_128(' helper should not be emitted for top-level verify, got:\n%s", result)
+	}
+}
+
+// TestLt128VerifyExpansion verifies the same for lt_128.
+func TestLt128VerifyExpansion(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	a := jet.CurrentAmount()
+	b := jet.CurrentAmount()
+	kOld := jet.Multiply64(a, b)
+	kNew := jet.Multiply64(a, b)
+	jet.Verify(jet.Lt128(kOld, kNew))
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	if !strings.Contains(result, "jet::full_subtract_64(") {
+		t.Errorf("Expected 'jet::full_subtract_64(' in output, got:\n%s", result)
+	}
+	if !strings.Contains(result, "unwrap_left::<()>(<bool>::into(") {
+		t.Errorf("Expected 'unwrap_left::<()>(<bool>::into(' in output, got:\n%s", result)
+	}
+	if strings.Contains(result, "fn lt_128(") {
+		t.Errorf("Bug 2 regression: 'fn lt_128(' helper should not be emitted for top-level verify, got:\n%s", result)
+	}
+}
+
+// TestLe128HelperStillEmittedForNonVerify verifies that when le_128 is stored
+// as a value (not directly in Verify), the helper function IS still emitted.
+func TestLe128HelperStillEmittedForNonVerify(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	a := jet.CurrentAmount()
+	b := jet.CurrentAmount()
+	kOld := jet.Multiply64(a, b)
+	kNew := jet.Multiply64(a, b)
+	ok := jet.Le128(kOld, kNew)
+	jet.Verify(ok)
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// le_128 is stored as a value, so the helper must be emitted.
+	if !strings.Contains(result, "fn le_128(") {
+		t.Errorf("Expected 'fn le_128(' helper for non-verify use, got:\n%s", result)
 	}
 }

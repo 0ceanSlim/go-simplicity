@@ -541,3 +541,42 @@ func TestExampleDoubleSHA256(t *testing.T) {
 		t.Error("double_sha256: unexpected sha_256_ctx_8_add_64 — should be add_32 for [32]byte input")
 	}
 }
+
+// TestAMMPoolInvariantNoMatchNodes compiles examples/amm_pool.go and verifies
+// that the output contains zero CASE-node-producing match patterns: all Liquid
+// jet Option/Either unwraps use unwrap/unwrap_right, and the k-invariant check
+// uses borrow-arithmetic instead of the le_128 helper.
+func TestAMMPoolInvariantNoMatchNodes(t *testing.T) {
+	out := compileExample(t, "../examples/amm_pool.go")
+	assertNoInvalidWitness(t, "amm_pool", out)
+
+	// Bug 1: no match-based false-arm patterns for Liquid jets.
+	if strings.Contains(out, "None => { assert!(false)") {
+		t.Errorf("Bug 1 regression: found match-based Option unwrap in amm_pool output:\n%s", out)
+	}
+
+	// Bug 1: no Left(x: ... assert!(false) for Either unwrap.
+	if strings.Contains(out, "Left(x:") && strings.Contains(out, "assert!(false)") {
+		t.Errorf("Bug 1 regression: found match-based Either unwrap in amm_pool output:\n%s", out)
+	}
+
+	// Bug 1: must use unwrap() and unwrap_right.
+	if !strings.Contains(out, "unwrap(") {
+		t.Errorf("Expected 'unwrap(' for Liquid jet Option unwrap, got:\n%s", out)
+	}
+	if !strings.Contains(out, "unwrap_right::<(u1, u256)>(") {
+		t.Errorf("Expected 'unwrap_right::<(u1, u256)>(' for Amount1 extraction, got:\n%s", out)
+	}
+
+	// Bug 2+3: k-invariant must use borrow-arithmetic.
+	if !strings.Contains(out, "jet::full_subtract_64(") {
+		t.Errorf("Expected 'jet::full_subtract_64(' for k-invariant, got:\n%s", out)
+	}
+	if !strings.Contains(out, "unwrap_left::<()>(<bool>::into(") {
+		t.Errorf("Expected 'unwrap_left::<()>(<bool>::into(' for k-invariant, got:\n%s", out)
+	}
+	// le_128 helper must not be emitted (top-level verify → inlined).
+	if strings.Contains(out, "fn le_128(") {
+		t.Errorf("Bug 2 regression: 'fn le_128(' helper emitted in amm_pool:\n%s", out)
+	}
+}

@@ -1559,48 +1559,103 @@ func buildLiquidJetLines(varName, jetCall string, kind liquidJetKind) []string {
 	case amountPairNoOpt:
 		// jet::current_amount() → (Asset1, Amount1)
 		// Tuple destructure; wildcard _ discards asset.
-		// SimplicityHL match_arm: single_expression arms MUST have trailing comma.
+		// Use unwrap_right (ASSERTR) instead of match to avoid CASE nodes.
 		return []string{
 			fmt.Sprintf("let (_, %s): (Asset1, Amount1) = %s;", confVar, jetCall),
-			fmt.Sprintf("let %s: u64 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u64) => v, };", varName, confVar, zero64),
+			fmt.Sprintf("let %s: u64 = unwrap_right::<(u1, u256)>(%s);", varName, confVar),
 		}
 	case amountPairOpt:
 		// jet::input_amount(n)/output_amount(n) → Option<(Asset1, Amount1)>
-		// First match unwraps Option (2 arms: None/Some), then destructure tuple.
+		// unwrap() = ASSERTR unwraps Option; unwrap_right extracts u64 from Amount1.
 		return []string{
-			fmt.Sprintf("let (_, %s): (Asset1, Amount1) = match %s { None => { assert!(false); (Right(%s), Right(%s)) }, Some(v: (Asset1, Amount1)) => v, };", confVar, jetCall, zero256, zero64),
-			fmt.Sprintf("let %s: u64 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u64) => v, };", varName, confVar, zero64),
+			fmt.Sprintf("let (_, %s): (Asset1, Amount1) = unwrap(%s);", confVar, jetCall),
+			fmt.Sprintf("let %s: u64 = unwrap_right::<(u1, u256)>(%s);", varName, confVar),
 		}
 	case assetNoOpt:
 		// jet::current_asset() → Asset1 = Either<(u1,u256), u256>
+		// Use unwrap_right (ASSERTR) to extract the explicit u256.
 		return []string{
 			fmt.Sprintf("let %s: Asset1 = %s;", confVar, jetCall),
-			fmt.Sprintf("let %s: u256 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u256) => v, };", varName, confVar, zero256),
+			fmt.Sprintf("let %s: u256 = unwrap_right::<(u1, u256)>(%s);", varName, confVar),
 		}
 	case assetOpt:
 		// jet::input_asset(n)/output_asset(n) → Option<Asset1>
-		// First match unwraps Option, then match extracts u256 from Either.
+		// unwrap() unwraps Option; unwrap_right extracts u256 from Asset1.
 		return []string{
-			fmt.Sprintf("let %s: Asset1 = match %s { None => { assert!(false); Right(%s) }, Some(v: Asset1) => v, };", confVar, jetCall, zero256),
-			fmt.Sprintf("let %s: u256 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u256) => v, };", varName, confVar, zero256),
+			fmt.Sprintf("let %s: Asset1 = unwrap(%s);", confVar, jetCall),
+			fmt.Sprintf("let %s: u256 = unwrap_right::<(u1, u256)>(%s);", varName, confVar),
 		}
 	case optScalarU256:
 		// jet::output_script_hash(n) → Option<u256>
-		// Single match unwraps Option.
+		// unwrap() = ASSERTR unwraps Option directly.
 		return []string{
-			fmt.Sprintf("let %s: u256 = match %s { None => { assert!(false); %s }, Some(v: u256) => v, };", varName, jetCall, zero256),
+			fmt.Sprintf("let %s: u256 = unwrap(%s);", varName, jetCall),
 		}
 	case issuanceAmountOpt:
 		// jet::issuance_asset_amount(n) → Option<Option<Amount1>>
-		// Three-step unwrap: Option → Option → Either.
+		// Two unwrap() calls then unwrap_right for the inner Either.
 		optVar := "o_" + varName
 		return []string{
-			fmt.Sprintf("let %s: Option<Amount1> = match %s { None => { assert!(false); Some(Right(%s)) }, Some(v: Option<Amount1>) => v, };", optVar, jetCall, zero64),
-			fmt.Sprintf("let %s: Amount1 = match %s { None => { assert!(false); Right(%s) }, Some(v: Amount1) => v, };", confVar, optVar, zero64),
-			fmt.Sprintf("let %s: u64 = match %s { Left(x: (u1, u256)) => { assert!(false); %s }, Right(v: u64) => v, };", varName, confVar, zero64),
+			fmt.Sprintf("let %s: Option<Amount1> = unwrap(%s);", optVar, jetCall),
+			fmt.Sprintf("let %s: Amount1 = unwrap(%s);", confVar, optVar),
+			fmt.Sprintf("let %s: u64 = unwrap_right::<(u1, u256)>(%s);", varName, confVar),
 		}
 	}
 	return nil
+}
+
+// findTopLevelComma finds the index of the first top-level comma in s
+// (i.e., not inside nested parentheses). Returns -1 if not found.
+func findTopLevelComma(s string) int {
+	depth := 0
+	for i, ch := range s {
+		switch ch {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// expandBorrow128Verify emits inline borrow-arithmetic for le_128/lt_128 used
+// in a verify context, producing zero CASE nodes.
+//
+// op is "le_128" or "lt_128"; argStr is the full "le_128(exprA, exprB)" string.
+//
+// For le_128(a, b) — assert a ≤ b: subtract b−a; the borrow flag must be false.
+// For lt_128(a, b) — assert a < b: subtract b−a−1 (init borrow=true); must be false.
+func expandBorrow128Verify(op, argStr string) []string {
+	// Strip "op(" prefix and ")" suffix to get "exprA, exprB".
+	inner := argStr[len(op)+1 : len(argStr)-1]
+	comma := findTopLevelComma(inner)
+	if comma < 0 {
+		// Malformed — fall back to assert!()
+		return []string{fmt.Sprintf("assert!(%s);", argStr)}
+	}
+	exprA := strings.TrimSpace(inner[:comma])
+	exprB := strings.TrimSpace(inner[comma+1:])
+
+	// Variable name prefix: "le" or "lt" to avoid collisions.
+	prefix := op[:2]
+
+	initBorrow := "false"
+	if op == "lt_128" {
+		initBorrow = "true"
+	}
+
+	return []string{
+		fmt.Sprintf("let (%s_a_hi, %s_a_lo): (u64, u64) = <u128>::into(%s);", prefix, prefix, exprA),
+		fmt.Sprintf("let (%s_b_hi, %s_b_lo): (u64, u64) = <u128>::into(%s);", prefix, prefix, exprB),
+		fmt.Sprintf("let (%s_borrow_lo, _): (bool, u64) = jet::full_subtract_64(%s, %s_b_lo, %s_a_lo);", prefix, initBorrow, prefix, prefix),
+		fmt.Sprintf("let (%s_borrow_hi, _): (bool, u64) = jet::full_subtract_64(%s_borrow_lo, %s_b_hi, %s_a_hi);", prefix, prefix, prefix, prefix),
+		fmt.Sprintf("unwrap_left::<()>(<bool>::into(%s_borrow_hi));", prefix),
+	}
 }
 
 // formatJetCallExpr formats a jet call expression.
@@ -1942,9 +1997,15 @@ func (t *Transpiler) generateCode() {
 		if u128CompareJets[jc.JetName] {
 			neededU128[jc.JetName] = true
 		}
-		// Also check args — e.g. verify wrapping le_128(...)
+		// Also check args — e.g. verify wrapping le_128(...).
+		// Skip top-level verify(le_128/lt_128) calls: those are inlined as
+		// borrow-arithmetic by expandBorrow128Verify and need no helper.
 		for name := range u128CompareJets {
 			if strings.Contains(jc.Args, name+"(") {
+				if jc.JetName == "verify" && (name == "le_128" || name == "lt_128") &&
+					strings.HasPrefix(jc.Args, name+"(") {
+					continue // will be inlined — helper not needed
+				}
 				neededU128[name] = true
 			}
 		}
@@ -2089,7 +2150,14 @@ func (t *Transpiler) generateMainFunction() {
 					if jc.JetName == "bip_0340_verify" {
 						args = jc.formatBIP340Args()
 					}
-					t.writeLine(fmt.Sprintf("    %s;", formatJetCallExpr(jc.JetName, args)))
+					if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(")) {
+						op := args[:strings.Index(args, "(")]
+						for _, line := range expandBorrow128Verify(op, args) {
+							t.writeLine("    " + line)
+						}
+					} else {
+						t.writeLine(fmt.Sprintf("    %s;", formatJetCallExpr(jc.JetName, args)))
+					}
 				}
 			}
 			for _, match := range t.matchExprs {
@@ -2143,7 +2211,14 @@ func (t *Transpiler) generateMainFunction() {
 				if jc.JetName == "bip_0340_verify" {
 					args = jc.formatBIP340Args()
 				}
-				t.writeLine(fmt.Sprintf("    %s;", formatJetCallExpr(jc.JetName, args)))
+				if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(")) {
+					op := args[:strings.Index(args, "(")]
+					for _, line := range expandBorrow128Verify(op, args) {
+						t.writeLine("    " + line)
+					}
+				} else {
+					t.writeLine(fmt.Sprintf("    %s;", formatJetCallExpr(jc.JetName, args)))
+				}
 			}
 		}
 		t.writeLine("}")
