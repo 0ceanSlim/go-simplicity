@@ -1623,13 +1623,14 @@ func findTopLevelComma(s string) int {
 	return -1
 }
 
-// expandBorrow128Verify emits inline borrow-arithmetic for le_128/lt_128 used
-// in a verify context, producing zero CASE nodes.
+// expandBorrow128Verify emits inline CASE-free code for le_128/lt_128/eq_128
+// used in a top-level verify context.
 //
-// op is "le_128" or "lt_128"; argStr is the full "le_128(exprA, exprB)" string.
+// op is "le_128", "lt_128", or "eq_128"; argStr is the full "op(exprA, exprB)" string.
 //
 // For le_128(a, b) — assert a ≤ b: subtract b−a; the borrow flag must be false.
 // For lt_128(a, b) — assert a < b: subtract b−a−1 (init borrow=true); must be false.
+// For eq_128(a, b) — assert a == b: both u64 halves must be equal (two assert! calls).
 func expandBorrow128Verify(op, argStr string) []string {
 	// Strip "op(" prefix and ")" suffix to get "exprA, exprB".
 	inner := argStr[len(op)+1 : len(argStr)-1]
@@ -1640,6 +1641,16 @@ func expandBorrow128Verify(op, argStr string) []string {
 	}
 	exprA := strings.TrimSpace(inner[:comma])
 	exprB := strings.TrimSpace(inner[comma+1:])
+
+	// eq_128: assert both u64 halves are equal — no borrow-arithmetic needed.
+	if op == "eq_128" {
+		return []string{
+			fmt.Sprintf("let (eq_a_hi, eq_a_lo): (u64, u64) = <u128>::into(%s);", exprA),
+			fmt.Sprintf("let (eq_b_hi, eq_b_lo): (u64, u64) = <u128>::into(%s);", exprB),
+			"assert!(jet::eq_64(eq_a_hi, eq_b_hi));",
+			"assert!(jet::eq_64(eq_a_lo, eq_b_lo));",
+		}
+	}
 
 	// Variable name prefix: "le" or "lt" to avoid collisions.
 	prefix := op[:2]
@@ -2002,7 +2013,7 @@ func (t *Transpiler) generateCode() {
 		// borrow-arithmetic by expandBorrow128Verify and need no helper.
 		for name := range u128CompareJets {
 			if strings.Contains(jc.Args, name+"(") {
-				if jc.JetName == "verify" && (name == "le_128" || name == "lt_128") &&
+				if jc.JetName == "verify" && (name == "le_128" || name == "lt_128" || name == "eq_128") &&
 					strings.HasPrefix(jc.Args, name+"(") {
 					continue // will be inlined — helper not needed
 				}
@@ -2150,7 +2161,7 @@ func (t *Transpiler) generateMainFunction() {
 					if jc.JetName == "bip_0340_verify" {
 						args = jc.formatBIP340Args()
 					}
-					if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(")) {
+					if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(") || strings.HasPrefix(args, "eq_128(")) {
 						op := args[:strings.Index(args, "(")]
 						for _, line := range expandBorrow128Verify(op, args) {
 							t.writeLine("    " + line)
@@ -2211,7 +2222,7 @@ func (t *Transpiler) generateMainFunction() {
 				if jc.JetName == "bip_0340_verify" {
 					args = jc.formatBIP340Args()
 				}
-				if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(")) {
+				if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(") || strings.HasPrefix(args, "eq_128(")) {
 					op := args[:strings.Index(args, "(")]
 					for _, line := range expandBorrow128Verify(op, args) {
 						t.writeLine("    " + line)

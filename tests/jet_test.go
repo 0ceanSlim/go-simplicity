@@ -1121,3 +1121,69 @@ func main() {
 		t.Errorf("Expected 'fn le_128(' helper for non-verify use, got:\n%s", result)
 	}
 }
+
+// TestEq128VerifyExpansion verifies that a top-level jet.Verify(jet.Eq128(a,b))
+// is inlined as two assert!(jet::eq_64(...)) calls with no CASE nodes.
+func TestEq128VerifyExpansion(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	reserve0 := jet.CurrentAmount()
+	reserve1 := jet.CurrentAmount()
+	deposit0 := jet.CurrentAmount()
+	deposit1 := jet.CurrentAmount()
+	prod1 := jet.Multiply64(deposit0, reserve1)
+	prod2 := jet.Multiply64(deposit1, reserve0)
+	jet.Verify(jet.Eq128(prod1, prod2))
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	if !strings.Contains(result, "assert!(jet::eq_64(") {
+		t.Errorf("Expected 'assert!(jet::eq_64(' in output, got:\n%s", result)
+	}
+	// Helper function must NOT be emitted when eq_128 only used in top-level verify.
+	if strings.Contains(result, "fn eq_128(") {
+		t.Errorf("'fn eq_128(' helper should not be emitted for top-level verify, got:\n%s", result)
+	}
+	// Must not contain any match expression (CASE nodes).
+	if strings.Contains(result, "match ") {
+		t.Errorf("Output must not contain 'match' (CASE nodes), got:\n%s", result)
+	}
+}
+
+// TestEq128HelperStillEmittedForNonVerify verifies that when eq_128 is stored
+// as a value (not directly in Verify), the helper function IS still emitted.
+func TestEq128HelperStillEmittedForNonVerify(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+func main() {
+	a := jet.CurrentAmount()
+	b := jet.CurrentAmount()
+	prod1 := jet.Multiply64(a, b)
+	prod2 := jet.Multiply64(a, b)
+	ok := jet.Eq128(prod1, prod2)
+	jet.Verify(ok)
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// eq_128 is stored as a value, so the helper must be emitted.
+	if !strings.Contains(result, "fn eq_128(") {
+		t.Errorf("Expected 'fn eq_128(' helper for non-verify use, got:\n%s", result)
+	}
+}
