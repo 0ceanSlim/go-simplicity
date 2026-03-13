@@ -12,7 +12,7 @@ import (
 	"github.com/0ceanslim/go-simplicity/pkg/jets"
 )
 
-const version = "1.3.4"
+const version = "1.3.41"
 
 var (
 	input    = flag.String("input", "", "Input Go source file")

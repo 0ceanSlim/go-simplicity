@@ -1238,4 +1238,12 @@ func main() {
 	if strings.Contains(result, "fn le_128(") {
 		t.Errorf("'fn le_128(' helper should not be emitted for fee_adjusted_le_128, got:\n%s", result)
 	}
+	// Must use add_64 for u128 sum (add_128 jet does not exist in Simplicity)
+	if !strings.Contains(result, "jet::add_64(") {
+		t.Errorf("Expected 'jet::add_64(' for u128 sum in output, got:\n%s", result)
+	}
+	// Must NOT emit add_128 (jet does not exist in the Simplicity protocol)
+	if strings.Contains(result, "jet::add_128(") {
+		t.Errorf("'jet::add_128' does not exist in Simplicity and must not appear in output, got:\n%s", result)
+	}
 }
