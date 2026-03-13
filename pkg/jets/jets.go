@@ -298,6 +298,22 @@ func (r *JetRegistry) registerBuiltinJets() {
 	r.jets["IssuanceAssetAmount"] = JetInfo{GoName: "IssuanceAssetAmount", SimplicityName: "issuance_asset_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
 	r.jets["IssuanceTokenAmount"] = JetInfo{GoName: "IssuanceTokenAmount", SimplicityName: "issuance_token_amount", ParamTypes: []string{"u32"}, ReturnType: "u64"}
 	r.jets["NewIssuanceContract"] = JetInfo{GoName: "NewIssuanceContract", SimplicityName: "new_issuance_contract", ParamTypes: []string{"u32"}, ReturnType: "u256"}
+
+	// -------------------------------------------------------------------------
+	// Synthetic transpiler-only jets (always inlined, never emitted as jet calls)
+	// -------------------------------------------------------------------------
+
+	// FeeAdjustedLe128 verifies the fee-adjusted AMM invariant:
+	//   (r0*(D-N) + newR0*N) * newR1 >= r0*D * r1
+	// where D=feeDen, N=feeNum, D-N=feeDiff.
+	// Args: (r0, newR0, feeNum, feeDiff, feeDen, newR1, r1) — all u64.
+	// Always inlined via expandFeeAdjustedLe128Verify; never emitted as a jet call.
+	r.jets["FeeAdjustedLe128"] = JetInfo{
+		GoName:         "FeeAdjustedLe128",
+		SimplicityName: "fee_adjusted_le_128",
+		ParamTypes:     []string{"u64", "u64", "u64", "u64", "u64", "u64", "u64"},
+		ReturnType:     "bool",
+	}
 }
 
 // Lookup returns the jet info for a given Go function name

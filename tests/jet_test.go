@@ -1187,3 +1187,55 @@ func main() {
 		t.Errorf("Expected 'fn eq_128(' helper for non-verify use, got:\n%s", result)
 	}
 }
+
+// TestFeeAdjustedLe128Verify verifies that jet.Verify(jet.FeeAdjustedLe128(...))
+// is inlined as multiply/add/subtract arithmetic (no CASE nodes, no helper function).
+func TestFeeAdjustedLe128Verify(t *testing.T) {
+	source := `
+package main
+
+import "simplicity/jet"
+
+const FeeNum  uint64 = 997
+const FeeDen  uint64 = 1000
+const FeeDiff uint64 = 3
+
+func main() {
+	reserve0 := jet.CurrentAmount()
+	reserve1 := jet.InputAmount(0)
+	newReserve0 := jet.OutputAmount(0)
+	newReserve1 := jet.OutputAmount(1)
+	jet.Verify(jet.FeeAdjustedLe128(reserve0, newReserve0, FeeNum, FeeDiff, FeeDen, newReserve1, reserve1))
+}
+`
+	c := compiler.New(compiler.Config{Target: "simplicityhl"})
+	result, err := c.Compile(source, "test.go")
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	// Must contain multiply_64 (for fee-adjusted products)
+	if !strings.Contains(result, "jet::multiply_64(") {
+		t.Errorf("Expected 'jet::multiply_64(' in output, got:\n%s", result)
+	}
+	// Must contain the overflow guard
+	if !strings.Contains(result, "assert!(jet::eq_64(") {
+		t.Errorf("Expected 'assert!(jet::eq_64(' in output, got:\n%s", result)
+	}
+	// Must contain borrow-arithmetic for the final >= comparison
+	if !strings.Contains(result, "unwrap_left::<()>(<bool>::into(") {
+		t.Errorf("Expected 'unwrap_left::<()>(<bool>::into(' in output, got:\n%s", result)
+	}
+	// Must NOT emit a helper function (always inlined)
+	if strings.Contains(result, "fn fee_adjusted_le_128(") {
+		t.Errorf("fee_adjusted_le_128 should be inlined, not emitted as a helper function, got:\n%s", result)
+	}
+	// Must NOT contain match expressions (no CASE nodes)
+	if strings.Contains(result, "match ") {
+		t.Errorf("Expected no 'match ' in output (no CASE nodes), got:\n%s", result)
+	}
+	// Must NOT emit le_128 helper (fee_adjusted contains le_128 as substring but is different)
+	if strings.Contains(result, "fn le_128(") {
+		t.Errorf("'fn le_128(' helper should not be emitted for fee_adjusted_le_128, got:\n%s", result)
+	}
+}

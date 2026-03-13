@@ -1679,6 +1679,56 @@ var u128CompareJets = map[string]bool{
 	"lt_128": true,
 }
 
+// splitTopLevelArgs splits a comma-separated argument string by top-level
+// commas (not nested inside parentheses). Used to parse synthetic jet args.
+func splitTopLevelArgs(s string) []string {
+	var result []string
+	start := 0
+	for {
+		rest := s[start:]
+		comma := findTopLevelComma(rest)
+		if comma < 0 {
+			result = append(result, strings.TrimSpace(rest))
+			break
+		}
+		result = append(result, strings.TrimSpace(rest[:comma]))
+		start += comma + 1
+	}
+	return result
+}
+
+// expandFeeAdjustedLe128Verify emits inline CASE-free code for the fee-adjusted
+// AMM invariant check: (r0*(D-N) + newR0*N) * newR1 >= r0*D * r1.
+//
+// argStr is the full "fee_adjusted_le_128(r0, newR0, feeNum, feeDiff, feeDen, newR1, r1)" string.
+// Intermediate products are asserted to fit in u64 (holds for all practical pool sizes).
+func expandFeeAdjustedLe128Verify(argStr string) []string {
+	const prefix = "fee_adjusted_le_128("
+	inner := argStr[len(prefix) : len(argStr)-1]
+	parts := splitTopLevelArgs(inner)
+	if len(parts) != 7 {
+		return []string{fmt.Sprintf("assert!(%s);", argStr)}
+	}
+	r0, newR0, feeNum, feeDiff, feeDen, newR1, r1 := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]
+	return []string{
+		fmt.Sprintf("let fa_t1: u128 = jet::multiply_64(%s, %s);", r0, feeDiff),
+		fmt.Sprintf("let fa_t2: u128 = jet::multiply_64(%s, %s);", newR0, feeNum),
+		"let (_, fa_adj): (bool, u128) = jet::add_128(fa_t1, fa_t2);",
+		"let (fa_adj_hi, fa_adj_lo): (u64, u64) = <u128>::into(fa_adj);",
+		"assert!(jet::eq_64(fa_adj_hi, 0));",
+		fmt.Sprintf("let fa_lhs: u128 = jet::multiply_64(fa_adj_lo, %s);", newR1),
+		fmt.Sprintf("let fa_r0d: u128 = jet::multiply_64(%s, %s);", r0, feeDen),
+		"let (fa_r0d_hi, fa_r0d_lo): (u64, u64) = <u128>::into(fa_r0d);",
+		"assert!(jet::eq_64(fa_r0d_hi, 0));",
+		fmt.Sprintf("let fa_rhs: u128 = jet::multiply_64(fa_r0d_lo, %s);", r1),
+		"let (fa_lhs_hi, fa_lhs_lo): (u64, u64) = <u128>::into(fa_lhs);",
+		"let (fa_rhs_hi, fa_rhs_lo): (u64, u64) = <u128>::into(fa_rhs);",
+		"let (fa_borrow_lo, _): (bool, u64) = jet::full_subtract_64(false, fa_lhs_lo, fa_rhs_lo);",
+		"let (fa_borrow_hi, _): (bool, u64) = jet::full_subtract_64(fa_borrow_lo, fa_lhs_hi, fa_rhs_hi);",
+		"unwrap_left::<()>(<bool>::into(fa_borrow_hi));",
+	}
+}
+
 // formatJetCallExpr formats a jet call expression.
 // SimplicityHL 0.3.0 uses assert!() instead of jet::verify(), and 128-bit
 // comparison jets are emitted as user-defined helper function calls.
@@ -1689,6 +1739,11 @@ func formatJetCallExpr(jetName, args string) string {
 	if u128CompareJets[jetName] {
 		// Call as user-defined function, not jet
 		return fmt.Sprintf("%s(%s)", jetName, args)
+	}
+	// Synthetic jets are always inlined — format without jet:: prefix so that
+	// the verify dispatch can detect them by prefix match.
+	if jetName == "fee_adjusted_le_128" {
+		return fmt.Sprintf("fee_adjusted_le_128(%s)", args)
 	}
 	if args == "" {
 		return fmt.Sprintf("jet::%s()", jetName)
@@ -2012,6 +2067,11 @@ func (t *Transpiler) generateCode() {
 		// Skip top-level verify(le_128/lt_128) calls: those are inlined as
 		// borrow-arithmetic by expandBorrow128Verify and need no helper.
 		for name := range u128CompareJets {
+			// fee_adjusted_le_128 contains "le_128" as substring — skip all
+			// u128 helper detection when this synthetic jet is the argument.
+			if jc.JetName == "verify" && strings.HasPrefix(jc.Args, "fee_adjusted_le_128(") {
+				continue
+			}
 			if strings.Contains(jc.Args, name+"(") {
 				if jc.JetName == "verify" && (name == "le_128" || name == "lt_128" || name == "eq_128") &&
 					strings.HasPrefix(jc.Args, name+"(") {
@@ -2161,7 +2221,11 @@ func (t *Transpiler) generateMainFunction() {
 					if jc.JetName == "bip_0340_verify" {
 						args = jc.formatBIP340Args()
 					}
-					if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(") || strings.HasPrefix(args, "eq_128(")) {
+					if jc.JetName == "verify" && strings.HasPrefix(args, "fee_adjusted_le_128(") {
+						for _, line := range expandFeeAdjustedLe128Verify(args) {
+							t.writeLine("    " + line)
+						}
+					} else if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(") || strings.HasPrefix(args, "eq_128(")) {
 						op := args[:strings.Index(args, "(")]
 						for _, line := range expandBorrow128Verify(op, args) {
 							t.writeLine("    " + line)
@@ -2222,7 +2286,11 @@ func (t *Transpiler) generateMainFunction() {
 				if jc.JetName == "bip_0340_verify" {
 					args = jc.formatBIP340Args()
 				}
-				if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(") || strings.HasPrefix(args, "eq_128(")) {
+				if jc.JetName == "verify" && strings.HasPrefix(args, "fee_adjusted_le_128(") {
+					for _, line := range expandFeeAdjustedLe128Verify(args) {
+						t.writeLine("    " + line)
+					}
+				} else if jc.JetName == "verify" && (strings.HasPrefix(args, "le_128(") || strings.HasPrefix(args, "lt_128(") || strings.HasPrefix(args, "eq_128(")) {
 					op := args[:strings.Index(args, "(")]
 					for _, line := range expandBorrow128Verify(op, args) {
 						t.writeLine("    " + line)
